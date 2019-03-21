@@ -2439,6 +2439,11 @@ int raw_write_stdout(const void *buf, int siz)
     else
         return -1;
 }
+#elif defined(OPENSSL_SYSNAME_TANDEM) && defined(OPENSSL_THREADS) && defined(_SPT_MODEL_)
+int raw_write_stdout(const void *buf,int siz)
+{
+	return write(fileno(stdout),(void*)buf,siz);
+}
 #else
 int raw_write_stdout(const void *buf, int siz)
 {

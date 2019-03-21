@@ -319,6 +319,20 @@ struct servent *getservbyname(const char *name, const char *proto);
 # endif
 /* end vxworks */
 
+/* ----------------------------- HP NonStop -------------------------------- */
+#ifdef __TANDEM
+#  include <strings.h>
+#  include <netdb.h>
+#  define getservbyname(name,proto)          getservbyname((char*)name,proto)
+#  define gethostbyname(name)                gethostbyname((char*)name)
+#  define ioctlsocket(a,b,c)	ioctl(a,b,c)
+/*#  define setsockopt(a,b,c,d,f) setsockopt(a,b,c,(char*)d,f)*/
+/*#  define getsockopt(a,b,c,d,f) getsockopt(a,b,c,(char*)d,f)*/
+/*#  define connect(a,b,c) connect(a,(struct sockaddr *)b,c)*/
+/*#  define bind(a,b,c) bind(a,(struct sockaddr *)b,c)*/
+/*#  define sendto(a,b,c,d,e,f) sendto(a,(char*)b,c,d,(struct sockaddr *)e,f)*/
+#endif
+
 # ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 #  define CRYPTO_memcmp memcmp
 # endif

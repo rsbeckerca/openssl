@@ -132,6 +132,13 @@ extern "C" {
 #  endif
 # endif
 
+/* ---------------------------- HP NONSTOP -------------------------------- */
+# ifdef __TANDEM
+#  ifdef _STRING
+#   include <strings.h>
+#  endif
+# endif
+
 /**
  * That's it for OS-specific stuff
  *****************************************************************************/
