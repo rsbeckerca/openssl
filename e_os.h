@@ -347,6 +347,26 @@ struct servent *getservbyname(const char *name, const char *proto);
 /*#  define connect(a,b,c) connect(a,(struct sockaddr *)b,c)*/
 /*#  define bind(a,b,c) bind(a,(struct sockaddr *)b,c)*/
 /*#  define sendto(a,b,c,d,e,f) sendto(a,(char*)b,c,d,(struct sockaddr *)e,f)*/
+#  if defined(OPENSSL_THREADS) && !defined(_PUT_MODEL_) 
+  /*
+   * HPNS SPT threads
+   */
+#  define  SPT_THREAD_SIGNAL 1
+#  define  SPT_THREAD_AWARE 1
+#  include <spthread.h>
+#   undef close
+#   define close spt_close
+/*
+#   define get_last_socket_error()	errno
+#   define clear_socket_error()	errno=0
+#   define ioctlsocket(a,b,c)	ioctl(a,b,c)
+#   define closesocket(s)		close(s)
+#   define readsocket(s,b,n)	read((s),(char*)(b),(n))
+#   define writesocket(s,b,n)	write((s),(char*)(b),(n)
+*/
+#   define accept(a,b,c)        accept(a,(struct sockaddr *)b,c)
+#   define recvfrom(a,b,c,d,e,f) recvfrom(a,b,(socklen_t)c,d,e,f)
+#  endif
 #endif
 
 # ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
