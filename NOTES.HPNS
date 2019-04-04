@@ -1,0 +1,28 @@
+## Probably have to be set:
+# COMP_ROOT=$(cygpath -w /path/to/comp_rooot)   # must be path format for system (ie windows)
+# CC=/path/to/c99                               # must be executable by shell
+
+## Optionally 
+# DBGFLAG="--debug"
+# CIPHENABLES="enable-ssl3 enable-ssl3-method enable-weak-ssl-ciphers enable-rc4"
+# onplatform cross compile (nsx->nsi): SYSTEMLIBS="-L/E/cs3/usr/local/lib"
+
+## Current Configure targets
+./Configure nonstop-nsx           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_put       threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG}
+                                  
+./Configure nonstop-nse           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_put       threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_g_tandem  no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+
+## Build loop:
+#  Configure <...>
+#  Make
