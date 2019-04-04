@@ -327,20 +327,23 @@ struct servent *getservbyname(const char *name, const char *proto);
 #  define gethostbyname(name)                gethostbyname((char*)name)
 #  define ioctlsocket(a,b,c)	ioctl(a,b,c)
 #  ifdef NO_GETPID
-    #include <cextdecs.h(PROCESSHANDLE_GETMINE_)>
-    #include <cextdecs.h(PROCESSHANDLE_DECOMPOSE_)>
-    #define getpid() \
-     ({ short phandle[10]={0}; \
-      union pseudo_pid { \
-       struct { \
-        short cpu; \
-        short pin; \
-      } cpu_pin ; \
-      int ppid; \
-     } ppid = { 0 }; \
-     PROCESSHANDLE_GETMINE_(phandle); \
-     PROCESSHANDLE_DECOMPOSE_(phandle, &ppid.cpu_pin.cpu, &ppid.cpu_pin.pin); \
-     1 ? ppid.ppid:0 ; })
+#    include <cextdecs.h(PROCESSHANDLE_GETMINE_)>
+#    include <cextdecs.h(PROCESSHANDLE_DECOMPOSE_)>
+       inline int nssgetpid()
+       {
+         short phandle[10]={0};
+         union pseudo_pid {
+          struct {
+           short cpu;
+           short pin;
+         } cpu_pin ;
+         int ppid;
+        } ppid = { 0 };
+        PROCESSHANDLE_GETMINE_(phandle);
+        PROCESSHANDLE_DECOMPOSE_(phandle, &ppid.cpu_pin.cpu, &ppid.cpu_pin.pin);     
+        return ppid.ppid;
+       }
+#    define getpid() nssgetpid()
 #  endif
 /*#  define setsockopt(a,b,c,d,f) setsockopt(a,b,c,(char*)d,f)*/
 /*#  define getsockopt(a,b,c,d,f) getsockopt(a,b,c,(char*)d,f)*/
