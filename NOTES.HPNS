@@ -6,6 +6,16 @@
 # DBGFLAG="--debug"
 # CIPHENABLES="enable-ssl3 enable-ssl3-method enable-weak-ssl-ciphers enable-rc4"
 # onplatform cross compile (nsx->nsi): SYSTEMLIBS="-L/E/cs3/usr/local/lib"
+## VPROC
+## For Itanium:
+# OPENSSL_VPROC_PREFIX=T0085H06
+## For X86:
+# OPENSSL_VPROC_PREFIX=T0085L01
+# export OPENSSL_VPROC=${OPENSSL_VPROC_PREFIX}_$(cat include/openssl/opensslv.h |\
+#  sed -n -e 's/^ *# *define  *OPENSSL_VERSION_TEXT[^"]*"\([^"]*\)"/\1/p' |\
+#  sed -e 's/[. ]/_/g' -e 's/[.-]/_/g' |\
+#  grep -v fips \
+#  )
 
 ## Current Configure targets
 ./Configure nonstop-nsx           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
