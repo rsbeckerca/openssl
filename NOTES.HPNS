@@ -24,6 +24,7 @@
 ./Configure nonstop-nsx_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG}
 ./Configure nonstop-nsx_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
 ./Configure nonstop-nsx_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG}
+./Configure nonstop-nsx_g_tandem  no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
                                   
 ./Configure nonstop-nse           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
 ./Configure nonstop-nse_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
