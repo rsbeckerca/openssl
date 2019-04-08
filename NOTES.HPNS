@@ -37,8 +37,11 @@
 ## Build loop:
 #  Configure <...>
 #  Make
+#  ...
+#  
+#  Guardian targets' libraries will have so-names 'ssl' and 'crypto'
 
-# ie as a lazy script:
+# ie as a naive script:
 ##!/bin/bash
 # mkdir nonstop-nse_build          ; cd nonstop-nse_build          ; ../Configure nonstop-nse           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
 # mkdir nonstop-nse_g_build        ; cd nonstop-nse_g_build        ; ../Configure nonstop-nse_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
