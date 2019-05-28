@@ -24,7 +24,7 @@ use OpenSSL::Glob;
 my $orig_death_handler = $SIG{__DIE__};
 $SIG{__DIE__} = \&death_handler;
 
-my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lxxx] [-Lxxx] [-fxxx] [-Kxxx] [no-hw-xxx|no-hw] [[no-]threads] [[no-]shared] [[no-]zlib|zlib-dynamic] [no-asm] [no-dso] [no-egd] [sctp] [386] [--prefix=DIR] [--openssldir=OPENSSLDIR] [--with-xxx[=vvv]] [--config=FILE] os/compiler[:flags]\n";
+my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lxxx] [-Lxxx] [-fxxx] [-Kxxx] [no-hw-xxx|no-hw] [[no-]threads] [[no-]shared] [[no-]zlib|zlib-dynamic] [no-asm] [no-egd] [sctp] [386] [--prefix=DIR] [--openssldir=OPENSSLDIR] [--with-xxx[=vvv]] [--config=FILE] os/compiler[:flags]\n";
 
 # Options:
 #
@@ -58,8 +58,6 @@ my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lx
 # [no-]pic      [don't] try to build position independent code when supported.
 #               If disabled, it also disables shared and dynamic-engine.
 # no-asm        do not use assembler
-# no-dso        do not compile in any native shared-library methods. This
-#               will ensure that all methods just return NULL.
 # no-egd        do not compile support for the entropy-gathering daemon APIs
 # [no-]zlib     [don't] compile support for zlib compression.
 # zlib-dynamic  Like "zlib", but the zlib library is expected to be a shared
@@ -75,7 +73,7 @@ my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lx
 # -static       while -static is also a pass-through compiler option (and
 #               as such is limited to environments where it's actually
 #               meaningful), it triggers a number configuration options,
-#               namely no-dso, no-pic, no-shared and no-threads. It is
+#               namely no-pic, no-shared and no-threads. It is
 #               argued that the only reason to produce statically linked
 #               binaries (and in context it means executables linked with
 #               -static flag, and not just executables linked with static
@@ -103,8 +101,9 @@ my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lx
 # SHA512_ASM    sha512_block is implemented in assembler
 # AES_ASM       AES_[en|de]crypt is implemented in assembler
 
-# Minimum warning options... any contributions to OpenSSL should at least get
-# past these.
+# Minimum warning options... any contributions to OpenSSL should at least
+# get past these.  Note that we only use these with C compilers, not with
+# C++ compilers.
 
 # DEBUG_UNUSED enables __owur (warn unused result) checks.
 # -DPEDANTIC complements -pedantic and is meant to mask code that
@@ -119,27 +118,23 @@ my $usage="Usage: Configure [no-<cipher> ...] [enable-<cipher> ...] [-Dxxx] [-lx
 # code, so we just tell compiler to be pedantic about everything
 # but 'long long' type.
 
-my %gcc_devteam_warn = ();
-{
-    my @common = qw( -DDEBUG_UNUSED
-                     -DPEDANTIC -pedantic -Wno-long-long
-                     -Wall
-                     -Wextra
-                     -Wno-unused-parameter
-                     -Wno-missing-field-initializers
-                     -Wswitch
-                     -Wsign-compare
-                     -Wshadow
-                     -Wformat
-                     -Wtype-limits
-                     -Wundef
-                     -Werror );
-    %gcc_devteam_warn = (
-        CFLAGS          => [ @common, qw( -Wmissing-prototypes
-                                          -Wstrict-prototypes ) ],
-        CXXFLAGS        => [ @common ]
-    );
-}
+my @gcc_devteam_warn = qw(
+    -DDEBUG_UNUSED
+    -DPEDANTIC -pedantic -Wno-long-long
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    -Wno-missing-field-initializers
+    -Wswitch
+    -Wsign-compare
+    -Wshadow
+    -Wformat
+    -Wtype-limits
+    -Wundef
+    -Werror
+    -Wmissing-prototypes
+    -Wstrict-prototypes
+);
 
 # These are used in addition to $gcc_devteam_warn when the compiler is clang.
 # TODO(openssl-team): fix problems and investigate if (at least) the
@@ -149,20 +144,16 @@ my %gcc_devteam_warn = ();
 #       -Wlanguage-extension-token -- no, we use asm()
 #       -Wunused-macros -- no, too tricky for BN and _XOPEN_SOURCE etc
 #       -Wextended-offsetof -- no, needed in CMS ASN1 code
-my %clang_devteam_warn = ();
-{
-    my @common = qw( -Wswitch-default
-                     -Wno-parentheses-equality
-                     -Wno-language-extension-token
-                     -Wno-extended-offsetof
-                     -Wconditional-uninitialized
-                     -Wincompatible-pointer-types-discards-qualifiers
-                     -Wno-unknown-warning-option );
-    %clang_devteam_warn = (
-        CFLAGS          => [ @common, qw( -Wmissing-variable-declarations ) ],
-        CXXFLAGS        => [ @common ]
-    );
-}
+my @clang_devteam_warn = qw(
+    -Wswitch-default
+    -Wno-parentheses-equality
+    -Wno-language-extension-token
+    -Wno-extended-offsetof
+    -Wconditional-uninitialized
+    -Wincompatible-pointer-types-discards-qualifiers
+    -Wno-unknown-warning-option
+    -Wmissing-variable-declarations
+);
 
 # This adds backtrace information to the memory leak info.  Is only used
 # when crypto-mdebug-backtrace is enabled.
@@ -341,6 +332,7 @@ my @disablables = (
     "autoload-config",
     "bf",
     "blake2",
+    "buildtest-c\\+\\+",
     "camellia",
     "capieng",
     "cast",
@@ -357,7 +349,6 @@ my @disablables = (
     "dgram",
     "dh",
     "dsa",
-    "dso",
     "dtls",
     "dynamic-engine",
     "ec",
@@ -435,12 +426,14 @@ my %deprecated_disablables = (
     "buf-freelists" => undef,
     "ripemd" => "rmd160",
     "ui" => "ui-console",
+    "dso" => "",                # Empty string means we're silent about it
     );
 
 # All of the following are disabled by default:
 
 our %disabled = ( # "what"         => "comment"
                   "asan"                => "default",
+                  "buildtest-c++"       => "default",
                   "crypto-mdebug"       => "default",
                   "crypto-mdebug-backtrace" => "default",
                   "devcryptoeng"        => "default",
@@ -486,9 +479,6 @@ my @disable_cascades = (
                         => [ "tls" ],
 
     "crypto-mdebug"     => [ "crypto-mdebug-backtrace" ],
-
-    # Without DSO, we can't load dynamic engines, so don't build them dynamic
-    "dso"               => [ "dynamic-engine" ],
 
     # Without position independent code, there can be no shared libraries or DSOs
     "pic"               => [ "shared" ],
@@ -567,7 +557,7 @@ my %user = (
     PERL        => env('PERL') || ($^O ne "VMS" ? $^X : "perl"),
     RANLIB      => env('RANLIB'),
     RC          => env('RC') || env('WINDRES'),
-    RCFLAGS     => [],
+    RCFLAGS     => [ env('RCFLAGS') || () ],
     RM          => undef,
    );
 # Info about what "make variables" may be prefixed with the cross compiler
@@ -584,6 +574,7 @@ my %useradd = (
     CXXFLAGS    => [],
     LDFLAGS     => [],
     LDLIBS      => [],
+    RCFLAGS     => [],
    );
 
 my %user_synonyms = (
@@ -721,10 +712,13 @@ while (@argvcopy)
                         }
                 elsif (exists $deprecated_disablables{$1})
                         {
-                        $deprecated_options{$_} = 1;
-                        if (defined $deprecated_disablables{$1})
+                        if ($deprecated_disablables{$1} ne "")
                                 {
-                                $disabled{$deprecated_disablables{$1}} = "option";
+                                $deprecated_options{$_} = 1;
+                                if (defined $deprecated_disablables{$1})
+                                        {
+                                        $disabled{$deprecated_disablables{$1}} = "option";
+                                        }
                                 }
                         }
                 else
@@ -759,7 +753,6 @@ while (@argvcopy)
                 # Pretend that our strict flags is a C flag, and replace it
                 # with the proper flags later on
                 push @{$useradd{CFLAGS}}, '--ossl-strict-warnings';
-                push @{$useradd{CXXFLAGS}}, '--ossl-strict-warnings';
                 $strict_warnings=1;
                 }
         elsif (/^--debug$/)
@@ -862,10 +855,6 @@ while (@argvcopy)
                 elsif (/^-static$/)
                         {
                         push @{$useradd{LDFLAGS}}, $_;
-                        $disabled{"dso"} = "forced";
-                        $disabled{"pic"} = "forced";
-                        $disabled{"shared"} = "forced";
-                        $disabled{"threads"} = "forced";
                         }
                 elsif (/^-D(.*)$/)
                         {
@@ -977,20 +966,30 @@ if (grep { /-rpath\b/ } ($user{LDFLAGS} ? @{$user{LDFLAGS}} : ())
         "***** any of asan, msan or ubsan\n";
 }
 
-my @tocheckfor = (keys %disabled);
-while (@tocheckfor) {
-    my %new_tocheckfor = ();
-    my @cascade_copy = (@disable_cascades);
-    while (@cascade_copy) {
-        my ($test, $descendents) = (shift @cascade_copy, shift @cascade_copy);
-        if (ref($test) eq "CODE" ? $test->() : defined($disabled{$test})) {
-            foreach(grep { !defined($disabled{$_}) } @$descendents) {
-                $new_tocheckfor{$_} = 1; $disabled{$_} = "forced";
+sub disable {
+    my $disable_type = shift;
+
+    for (@_) {
+        $disabled{$_} = $disable_type;
+    }
+
+    my @tocheckfor = (@_ ? @_ : keys %disabled);
+    while (@tocheckfor) {
+        my %new_tocheckfor = ();
+        my @cascade_copy = (@disable_cascades);
+        while (@cascade_copy) {
+            my ($test, $descendents) =
+                (shift @cascade_copy, shift @cascade_copy);
+            if (ref($test) eq "CODE" ? $test->() : defined($disabled{$test})) {
+                foreach (grep { !defined($disabled{$_}) } @$descendents) {
+                    $new_tocheckfor{$_} = 1; $disabled{$_} = "cascade";
+                }
             }
         }
+        @tocheckfor = (keys %new_tocheckfor);
     }
-    @tocheckfor = (keys %new_tocheckfor);
 }
+disable();                     # First cascade run
 
 our $die = sub { die @_; };
 if ($target eq "TABLE") {
@@ -1074,47 +1073,11 @@ foreach (keys %target_attr_translate) {
 
 %target = ( %{$table{DEFAULTS}}, %target );
 
-# Make the flags to build DSOs the same as for shared libraries unless they
-# are already defined
-$target{module_cflags} = $target{shared_cflag} unless defined $target{module_cflags};
-$target{module_cxxflags} = $target{shared_cxxflag} unless defined $target{module_cxxflags};
-$target{module_ldflags} = $target{shared_ldflag} unless defined $target{module_ldflags};
-{
-    my $shared_info_pl =
-        catfile(dirname($0), "Configurations", "shared-info.pl");
-    my %shared_info = read_eval_file($shared_info_pl);
-    push @{$target{_conf_fname_int}}, $shared_info_pl;
-    my $si = $target{shared_target};
-    while (ref $si ne "HASH") {
-        last if ! defined $si;
-        if (ref $si eq "CODE") {
-            $si = $si->();
-        } else {
-            $si = $shared_info{$si};
-        }
-    }
-
-    # Some of the 'shared_target' values don't have any entried in
-    # %shared_info.  That's perfectly fine, AS LONG AS the build file
-    # template knows how to handle this.  That is currently the case for
-    # Windows and VMS.
-    if (defined $si) {
-        # Just as above, copy certain shared_* attributes to the corresponding
-        # module_ attribute unless the latter is already defined
-        $si->{module_cflags} = $si->{shared_cflag} unless defined $si->{module_cflags};
-        $si->{module_cxxflags} = $si->{shared_cxxflag} unless defined $si->{module_cxxflags};
-        $si->{module_ldflags} = $si->{shared_ldflag} unless defined $si->{module_ldflags};
-        foreach (sort keys %$si) {
-            $target{$_} = defined $target{$_}
-                ? add($si->{$_})->($target{$_})
-                : $si->{$_};
-        }
-    }
-}
-
 my %conf_files = map { $_ => 1 } (@{$target{_conf_fname_int}});
 $config{conf_files} = [ sort keys %conf_files ];
 
+# Using sub disable within these loops may prove fragile, so we run
+# a cascade afterwards
 foreach my $feature (@{$target{disable}}) {
     if (exists $deprecated_disablables{$feature}) {
         warn "***** config $target disables deprecated feature $feature\n";
@@ -1133,6 +1096,7 @@ foreach my $feature (@{$target{enable}}) {
         delete $disabled{$feature};
     }
 }
+disable();                      # Run a cascade now
 
 $target{CXXFLAGS}//=$target{CFLAGS} if $target{CXX};
 $target{cxxflags}//=$target{cflags} if $target{CXX};
@@ -1182,6 +1146,22 @@ foreach (keys %user) {
     delete $config{$_} unless defined $config{$_};
 }
 
+# Finish up %config by appending things the user gave us on the command line
+# apart from "make variables"
+foreach (keys %useradd) {
+    # The must all be lists, so we assert that here
+    die "internal error: \$useradd{$_} isn't an ARRAY\n"
+        unless ref $useradd{$_} eq 'ARRAY';
+
+    if (defined $config{$_}) {
+        push @{$config{$_}}, @{$useradd{$_}};
+    } else {
+        $config{$_} = [ @{$useradd{$_}} ];
+    }
+}
+# At this point, we can forget everything about %user and %useradd,
+# because it's now all been merged into the corresponding $config entry
+
 # Allow overriding the build file name
 $config{build_file} = env('BUILDFILE') || $target{build_file} || "Makefile";
 
@@ -1189,7 +1169,7 @@ my %disabled_info = ();         # For configdata.pm
 foreach my $what (sort keys %disabled) {
     $config{options} .= " no-$what";
 
-    if (!grep { $what eq $_ } ( 'dso', 'threads', 'shared', 'pic',
+    if (!grep { $what eq $_ } ( 'buildtest-c++', 'threads', 'shared', 'pic',
                                 'dynamic-engine', 'makedepend',
                                 'zlib-dynamic', 'zlib', 'sse2' )) {
         (my $WHAT = uc $what) =~ s|-|_|g;
@@ -1258,8 +1238,7 @@ if ($target =~ /^mingw/ && `$config{CC} --target-help 2>&1` =~ m/-mno-cygwin/m)
         }
 
 if ($target =~ /linux.*-mips/ && !$disabled{asm}
-        && !grep { $_ !~ /-m(ips|arch=)/ } (@{$user{CFLAGS}},
-                                            @{$useradd{CFLAGS}})) {
+        && !grep { $_ !~ /-m(ips|arch=)/ } (@{$config{CFLAGS}})) {
         # minimally required architecture flags for assembly modules
         my $value;
         $value = '-mips2' if ($target =~ /mips32/);
@@ -1273,7 +1252,7 @@ unless ($disabled{threads}) {
     if ($auto_threads) {
         # Enabled by default, disable it forcibly if unavailable
         if ($target{thread_scheme} eq "(unknown)") {
-            $disabled{threads} = "unavailable";
+            disable("unavailable", 'threads');
         }
     } else {
         # The user chose to enable threads explicitly, let's see
@@ -1284,8 +1263,7 @@ unless ($disabled{threads}) {
             # system-dependent compiler options that are necessary.  We
             # can't truly check that the given options are correct, but
             # we expect the user to know what [s]He is doing.
-            if (!@{$user{CFLAGS}} && !@{$useradd{CFLAGS}}
-                    && !@{$user{CPPDEFINES}} && !@{$useradd{CPPDEFINES}}) {
+            if (!@{$config{CFLAGS}} && !@{$config{CPPDEFINES}}) {
                 die "You asked for multi-threading support, but didn't\n"
                     ,"provide any system-specific compiler options\n";
             }
@@ -1309,9 +1287,7 @@ if ($target{shared_target} eq "")
         {
         $no_shared_warn = 1
             if (!$disabled{shared} || !$disabled{"dynamic-engine"});
-        $disabled{shared} = "no-shared-target";
-        $disabled{pic} = $disabled{shared} = $disabled{"dynamic-engine"} =
-            "no-shared-target";
+        disable('no-shared-target', 'pic');
         }
 
 if ($disabled{"dynamic-engine"}) {
@@ -1324,20 +1300,16 @@ if ($disabled{"dynamic-engine"}) {
 
 unless ($disabled{asan}) {
     push @{$config{cflags}}, "-fsanitize=address";
-    push @{$config{cxxflags}}, "-fsanitize=address" if $config{CXX};
 }
 
 unless ($disabled{ubsan}) {
     # -DPEDANTIC or -fnosanitize=alignment may also be required on some
     # platforms.
     push @{$config{cflags}}, "-fsanitize=undefined", "-fno-sanitize-recover=all";
-    push @{$config{cxxflags}}, "-fsanitize=undefined", "-fno-sanitize-recover=all"
-        if $config{CXX};
 }
 
 unless ($disabled{msan}) {
   push @{$config{cflags}}, "-fsanitize=memory";
-  push @{$config{cxxflags}}, "-fsanitize=memory" if $config{CXX};
 }
 
 unless ($disabled{"fuzz-libfuzzer"} && $disabled{"fuzz-afl"}
@@ -1460,7 +1432,7 @@ if (!$disabled{makedepend}) {
         # In all other cases, we look for 'makedepend', and disable the
         # capability if not found.
         $config{makedepprog} = which('makedepend');
-        $disabled{makedepend} = "unavailable" unless $config{makedepprog};
+        disable('unavailable', 'makedepend') unless $config{makedepprog};
     }
 }
 
@@ -1526,36 +1498,27 @@ if (defined($config{api})) {
     push @{$config{defines}}, $apiflag;
 }
 
-my %strict_warnings_collection=( CFLAGS => [], CXXFLAGS => []);
+my @strict_warnings_collection=();
 if ($strict_warnings)
         {
         my $wopt;
         my $gccver = $predefined_C{__GNUC__} // -1;
-        my $gxxver = $predefined_CXX{__GNUC__} // -1;
 
         warn "WARNING --strict-warnings requires gcc[>=4] or gcc-alike"
             unless $gccver >= 4;
-        warn "WARNING --strict-warnings requires g++[>=4] or g++-alike"
-            unless $gxxver >= 4;
-        foreach (qw(CFLAGS CXXFLAGS))
-                {
-                push @{$strict_warnings_collection{$_}},
-                        @{$gcc_devteam_warn{$_}};
-                }
-        push @{$strict_warnings_collection{CFLAGS}},
-                @{$clang_devteam_warn{CFLAGS}}
-                        if (defined($predefined_C{__clang__}));
-        push @{$strict_warnings_collection{CXXFLAGS}},
-                @{$clang_devteam_warn{CXXFLAGS}}
-                        if (defined($predefined_CXX{__clang__}));
+        push @strict_warnings_collection, @gcc_devteam_warn;
+        push @strict_warnings_collection, @clang_devteam_warn
+            if (defined($predefined_C{__clang__}));
         }
-foreach my $idx (qw(CFLAGS CXXFLAGS))
-        {
-        $useradd{$idx} = [ map { $_ eq '--ossl-strict-warnings'
-                                     ? @{$strict_warnings_collection{$idx}}
-                                     : ( $_ ) }
-                               @{$useradd{$idx}} ];
-        }
+
+if (grep { $_ eq '-static' } @{$config{LDFLAGS}}) {
+    disable('static', 'pic', 'threads');
+}
+
+$config{CFLAGS} = [ map { $_ eq '--ossl-strict-warnings'
+                              ? @strict_warnings_collection
+                              : ( $_ ) }
+                    @{$config{CFLAGS}} ];
 
 unless ($disabled{"crypto-mdebug-backtrace"})
         {
@@ -1563,9 +1526,6 @@ unless ($disabled{"crypto-mdebug-backtrace"})
                 {
                 push @{$config{cflags}}, $wopt
                         unless grep { $_ eq $wopt } @{$config{cflags}};
-                push @{$config{cxxflags}}, $wopt
-                        if ($config{CXX}
-                            && !grep { $_ eq $wopt } @{$config{cxxflags}});
                 }
         if ($target =~ /^BSD-/)
                 {
@@ -1583,35 +1543,62 @@ unless ($disabled{afalgeng}) {
             ($mi2) = $mi2 =~ /(\d+)/;
             my $ver = $ma*10000 + $mi1*100 + $mi2;
             if ($ver < $minver) {
-                $disabled{afalgeng} = "too-old-kernel";
+                disable('too-old-kernel', 'afalgeng');
             } else {
                 push @{$config{engdirs}}, "afalg";
             }
         } else {
-            $disabled{afalgeng} = "cross-compiling";
+            disable('cross-compiling', 'afalgeng');
         }
     } else {
-        $disabled{afalgeng}  = "not-linux";
+        disable('not-linux', 'afalgeng');
     }
 }
 
 push @{$config{openssl_other_defines}}, "OPENSSL_NO_AFALGENG" if ($disabled{afalgeng});
 
-# Finish up %config by appending things the user gave us on the command line
-# apart from "make variables"
-foreach (keys %useradd) {
-    # The must all be lists, so we assert that here
-    die "internal error: \$useradd{$_} isn't an ARRAY\n"
-        unless ref $useradd{$_} eq 'ARRAY';
+# Get the extra flags used when building shared libraries and modules.  We
+# do this late because some of them depend on %disabled.
 
-    if (defined $config{$_}) {
-        push @{$config{$_}}, @{$useradd{$_}};
-    } else {
-        $config{$_} = [ @{$useradd{$_}} ];
+# Make the flags to build DSOs the same as for shared libraries unless they
+# are already defined
+$target{module_cflags} = $target{shared_cflag} unless defined $target{module_cflags};
+$target{module_cxxflags} = $target{shared_cxxflag} unless defined $target{module_cxxflags};
+$target{module_ldflags} = $target{shared_ldflag} unless defined $target{module_ldflags};
+{
+    my $shared_info_pl =
+        catfile(dirname($0), "Configurations", "shared-info.pl");
+    my %shared_info = read_eval_file($shared_info_pl);
+    push @{$target{_conf_fname_int}}, $shared_info_pl;
+    my $si = $target{shared_target};
+    while (ref $si ne "HASH") {
+        last if ! defined $si;
+        if (ref $si eq "CODE") {
+            $si = $si->();
+        } else {
+            $si = $shared_info{$si};
+        }
+    }
+
+    # Some of the 'shared_target' values don't have any entries in
+    # %shared_info.  That's perfectly fine, AS LONG AS the build file
+    # template knows how to handle this.  That is currently the case for
+    # Windows and VMS.
+    if (defined $si) {
+        # Just as above, copy certain shared_* attributes to the corresponding
+        # module_ attribute unless the latter is already defined
+        $si->{module_cflags} = $si->{shared_cflag} unless defined $si->{module_cflags};
+        $si->{module_cxxflags} = $si->{shared_cxxflag} unless defined $si->{module_cxxflags};
+        $si->{module_ldflags} = $si->{shared_ldflag} unless defined $si->{module_ldflags};
+        foreach (sort keys %$si) {
+            $target{$_} = defined $target{$_}
+                ? add($si->{$_})->($target{$_})
+                : $si->{$_};
+        }
     }
 }
 
-# ALL MODIFICATIONS TO %config and %target MUST BE DONE FROM HERE ON
+# ALL MODIFICATIONS TO %disabled, %config and %target MUST BE DONE FROM HERE ON
 
 # If we use the unified build, collect information from build.info files
 my %unified_info = ();
