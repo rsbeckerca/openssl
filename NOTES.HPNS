@@ -18,44 +18,25 @@
 #  )
 
 ## Current Configure targets
-./Configure nonstop-nsx           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_put       threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG}
-./Configure nonstop-nsx_g_tandem  no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+#  Guardian targets' libraries will have so-names 'ssl' and 'crypto'
+./Configure nonstop-nsx          --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_g        --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_put      --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_spt      --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_64       --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_64_put   --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nsx_g_tandem --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
                                   
-./Configure nonstop-nse           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_put       threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
-./Configure nonstop-nse_g_tandem  no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse          --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_g        --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_put      --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_spt      --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_64       --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_64_put   --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  threads "-D_REENTRANT" --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
+./Configure nonstop-nse_g_tandem --prefix=${PWD}/install --openssldir=${PWD}/install no-dynamic-engine  no-threads             --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}
 
 ## Build loop:
 #  Configure <...>
 #  Make
 #  ...
-#  
-#  Guardian targets' libraries will have so-names 'ssl' and 'crypto'
-
-# ie as a naive script:
-##!/bin/bash
-# mkdir nonstop-nse_build          ; cd nonstop-nse_build          ; ../Configure nonstop-nse           no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
-# mkdir nonstop-nse_g_build        ; cd nonstop-nse_g_build        ; ../Configure nonstop-nse_g         no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
-# mkdir nonstop-nse_put_build      ; cd nonstop-nse_put_build      ; ../Configure nonstop-nse_put       threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}  ; cd ..
-# mkdir nonstop-nse_spt_build      ; cd nonstop-nse_spt_build      ; ../Configure nonstop-nse_spt       threads "-D_REENTRANT" --with-rand-seed=egd -lspt ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}  ; cd ..
-# mkdir nonstop-nse_64_build       ; cd nonstop-nse_64_build       ; ../Configure nonstop-nse_64        no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
-# mkdir nonstop-nse_64_put_build   ; cd nonstop-nse_64_put_build   ; ../Configure nonstop-nse_64_put    threads "-D_REENTRANT" --with-rand-seed=egd -lput ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}  ; cd ..
-# mkdir nonstop-nse_g_tandem_build ; cd nonstop-nse_g_tandem_build ; ../Configure nonstop-nse_g_tandem  no-threads --with-rand-seed=egd ${CIPHENABLES} ${DBGFLAG} ${SYSTEMLIBS}                    ; cd ..
-# 
-# cd nonstop-nse_build          ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_g_build        ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_put_build      ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_spt_build      ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_64_build       ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_64_put_build   ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-# cd nonstop-nse_g_tandem_build ; make -j6 ; rc=$?; if ((rc != 0); then echo "BUILD FAIL"; exit 0; fi; cd ..
-#
+#  Make install
