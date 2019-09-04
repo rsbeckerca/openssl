@@ -5,6 +5,10 @@
   This file gives a brief overview of the major changes between each OpenSSL
   release. For more details please read the CHANGES file.
 
+  Major changes between OpenSSL 1.1.1c and OpenSSL 1.1.1d [under development]
+
+      o
+
   Major changes between OpenSSL 1.1.1b and OpenSSL 1.1.1c [28 May 2019]
 
       o Prevent over long nonces in ChaCha20-Poly1305 (CVE-2019-1543)
@@ -601,7 +605,7 @@
 
   Major changes between OpenSSL 0.9.7h and OpenSSL 0.9.7i [14 Oct 2005]:
 
-      o Give EVP_MAX_MD_SIZE it's old value, except for a FIPS build.
+      o Give EVP_MAX_MD_SIZE its old value, except for a FIPS build.
 
   Major changes between OpenSSL 0.9.7g and OpenSSL 0.9.7h [11 Oct 2005]:
 
