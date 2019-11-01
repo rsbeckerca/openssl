@@ -369,7 +369,7 @@ struct servent *getservbyname(const char *name, const char *proto);
         PROCESSHANDLE_DECOMPOSE_(phandle, &ppid.cpu_pin.cpu, &ppid.cpu_pin.pin);     
         return ppid.ppid;
        }
-#    define getpid() nssgetpid()
+#    define getpid(a) nssgetpid(a)
 #  endif
 /*#  define setsockopt(a,b,c,d,f) setsockopt(a,b,c,(char*)d,f)*/
 /*#  define getsockopt(a,b,c,d,f) getsockopt(a,b,c,(char*)d,f)*/

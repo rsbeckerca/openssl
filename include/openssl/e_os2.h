@@ -134,6 +134,9 @@ extern "C" {
 
 /* ---------------------------- HP NONSTOP -------------------------------- */
 # ifdef __TANDEM
+#  ifdef NO_GETPID
+#    define getpid(a) nssgetpid(a)
+#  endif
 #  ifdef _STRING
 #   include <strings.h>
 #  endif
