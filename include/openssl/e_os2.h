@@ -135,11 +135,11 @@ extern "C" {
 /* ---------------------------- HP NONSTOP -------------------------------- */
 # ifdef __TANDEM
 #  ifdef NO_GETPID
-#    include <cextdecs.h(PROCESSHANDLE_GETMINE_)>
-#    include <cextdecs.h(PROCESSHANDLE_DECOMPOSE_)>
 inline int nssgetpid();
 #    ifndef NSSGETPID_MACRO
 #      define NSSGETPID_MACRO
+#      include <cextdecs.h(PROCESSHANDLE_GETMINE_)>
+#      include <cextdecs.h(PROCESSHANDLE_DECOMPOSE_)>
        inline int nssgetpid()
        {
          short phandle[10]={0};
