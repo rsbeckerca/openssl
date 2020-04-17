@@ -14,7 +14,7 @@
 #include <strings.h>
 #endif
 #include "internal/conf.h"
-#include "internal/ctype.h"
+#include "crypto/ctype.h"
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/conf.h>
