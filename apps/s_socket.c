@@ -32,6 +32,10 @@ typedef unsigned int u_int;
 # include "s_apps.h"
 # include "internal/sockets.h"
 
+#if defined(__TANDEM)
+# #include <floss.h(floss_read)>
+#endif
+
 # include <openssl/bio.h>
 # include <openssl/err.h>
 

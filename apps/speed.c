@@ -32,6 +32,10 @@
 # include OPENSSL_UNISTD
 #endif
 
+#if defined(__TANDEM)
+# include <floss.h(floss_fork)>
+#endif
+
 #if defined(_WIN32)
 # include <windows.h>
 #endif

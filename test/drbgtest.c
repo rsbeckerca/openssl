@@ -22,6 +22,9 @@
 # include <windows.h>
 #endif
 
+#if defined(__TANDEM)
+# include <floss.h(floss_fork)>
+#endif
 
 #if defined(OPENSSL_SYS_UNIX)
 # include <sys/types.h>

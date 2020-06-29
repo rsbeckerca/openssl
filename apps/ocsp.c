@@ -67,6 +67,10 @@ NON_EMPTY_TRANSLATION_UNIT
 #  define LOG_ERR       2
 # endif
 
+# if defined(__TANDEM)
+#  include <floss.h(floss_fork)>
+# endif
+
 # if defined(OPENSSL_SYS_VXWORKS)
 /* not supported */
 int setpgid(pid_t pid, pid_t pgid)
