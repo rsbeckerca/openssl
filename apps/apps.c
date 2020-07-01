@@ -2452,7 +2452,9 @@ int raw_read_stdin(void *buf, int siz)
 }
 #else
 # if defined(__TANDEM)
-#  include <floss.h(floss_read)>
+#  if defined(OPENSSL_TANDEM_FLOSS)
+#   include <floss.h(floss_read)>
+#  endif
 # endif
 int raw_read_stdin(void *buf, int siz)
 {
@@ -2471,7 +2473,9 @@ int raw_write_stdout(const void *buf, int siz)
 }
 #elif defined(OPENSSL_SYSNAME_TANDEM) && defined(OPENSSL_THREADS) && defined(_SPT_MODEL_)
 # if defined(__TANDEM)
-#  include <floss.h(floss_write)>
+#  if defined(OPENSSL_TANDEM_FLOSS)
+#   include <floss.h(floss_write)>
+#  endif
 # endif
 int raw_write_stdout(const void *buf,int siz)
 {
@@ -2479,7 +2483,9 @@ int raw_write_stdout(const void *buf,int siz)
 }
 #else
 # if defined(__TANDEM)
-#  include <floss.h(floss_write)>
+#  if defined(OPENSSL_TANDEM_FLOSS)
+#   include <floss.h(floss_write)>
+#  endif
 # endif
 int raw_write_stdout(const void *buf, int siz)
 {

@@ -33,7 +33,9 @@
 #endif
 
 #if defined(__TANDEM)
-# include <floss.h(floss_fork)>
+# if defined(OPENSSL_TANDEM_FLOSS)
+#  include <floss.h(floss_fork)>
+# endif
 #endif
 
 #if defined(_WIN32)
