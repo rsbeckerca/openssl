@@ -21,6 +21,7 @@
 #include "prov/providercommon.h"
 #include "prov/provider_util.h"
 #include "prov/seeding.h"
+#include "internal/nelem.h"
 #include "self_test.h"
 #include "crypto/context.h"
 #include "internal/core.h"
@@ -37,8 +38,12 @@ static OSSL_FUNC_provider_gettable_params_fn fips_gettable_params;
 static OSSL_FUNC_provider_get_params_fn fips_get_params;
 static OSSL_FUNC_provider_query_operation_fn fips_query;
 
-#define ALGC(NAMES, FUNC, CHECK) { { NAMES, FIPS_DEFAULT_PROPERTIES, FUNC }, CHECK }
+#define ALGC(NAMES, FUNC, CHECK)                \
+    { { NAMES, FIPS_DEFAULT_PROPERTIES, FUNC }, CHECK }
+#define UNAPPROVED_ALGC(NAMES, FUNC, CHECK)     \
+    { { NAMES, FIPS_UNAPPROVED_PROPERTIES, FUNC }, CHECK }
 #define ALG(NAMES, FUNC) ALGC(NAMES, FUNC, NULL)
+#define UNAPPROVED_ALG(NAMES, FUNC) UNAPPROVED_ALGC(NAMES, FUNC, NULL)
 
 extern OSSL_FUNC_core_thread_start_fn *c_thread_start;
 int FIPS_security_check_enabled(OSSL_LIB_CTX *libctx);
@@ -292,6 +297,11 @@ static const OSSL_ALGORITHM_CAPABLE fips_ciphers[] = {
     ALG(PROV_NAMES_AES_128_CTR, ossl_aes128ctr_functions),
     ALG(PROV_NAMES_AES_256_XTS, ossl_aes256xts_functions),
     ALG(PROV_NAMES_AES_128_XTS, ossl_aes128xts_functions),
+#ifndef OPENSSL_NO_SIV
+    ALG(PROV_NAMES_AES_128_GCM_SIV, ossl_aes128gcm_siv_functions),
+    ALG(PROV_NAMES_AES_192_GCM_SIV, ossl_aes192gcm_siv_functions),
+    ALG(PROV_NAMES_AES_256_GCM_SIV, ossl_aes256gcm_siv_functions),
+#endif /* OPENSSL_NO_SIV */
     ALG(PROV_NAMES_AES_256_GCM, ossl_aes256gcm_functions),
     ALG(PROV_NAMES_AES_192_GCM, ossl_aes192gcm_functions),
     ALG(PROV_NAMES_AES_128_GCM, ossl_aes128gcm_functions),
@@ -319,8 +329,8 @@ static const OSSL_ALGORITHM_CAPABLE fips_ciphers[] = {
     ALGC(PROV_NAMES_AES_256_CBC_HMAC_SHA256, ossl_aes256cbc_hmac_sha256_functions,
          ossl_cipher_capable_aes_cbc_hmac_sha256),
 #ifndef OPENSSL_NO_DES
-    ALG(PROV_NAMES_DES_EDE3_ECB, ossl_tdes_ede3_ecb_functions),
-    ALG(PROV_NAMES_DES_EDE3_CBC, ossl_tdes_ede3_cbc_functions),
+    UNAPPROVED_ALG(PROV_NAMES_DES_EDE3_ECB, ossl_tdes_ede3_ecb_functions),
+    UNAPPROVED_ALG(PROV_NAMES_DES_EDE3_CBC, ossl_tdes_ede3_cbc_functions),
 #endif  /* OPENSSL_NO_DES */
     { { NULL, NULL, NULL }, NULL }
 };

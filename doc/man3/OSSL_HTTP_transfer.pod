@@ -102,8 +102,8 @@ The callback function may modify the BIO provided in the I<bio> argument,
 whereby it may make use of a custom defined argument I<arg>,
 which may for instance point to an B<SSL_CTX> structure.
 During connection establishment, just after calling BIO_do_connect_retry(), the
-callback function is invoked with the I<connect> argument being 1 and the I<detail>
-argument being 1 if HTTPS is requested, i.e., SSL/TLS should be enabled, else 0.
+callback function is invoked with the I<connect> argument being 1 and
+I<detail> being 1 if I<use_ssl> is nonzero (i.e., HTTPS is requested), else 0.
 On disconnect I<connect> is 0 and I<detail> is 1 if no error occurred, else 0.
 For instance, on connect the callback may push an SSL BIO to implement HTTPS;
 after disconnect it may do some diagnostic output and pop and free the SSL BIO.
@@ -169,9 +169,17 @@ else HTTP POST with the contents of I<req> and optional I<content_type>, where
 the length of the data in I<req> does not need to be determined in advance: the
 BIO will be read on-the-fly while sending the request, which supports streaming.
 The optional list I<headers> may contain additional custom HTTP header lines.
-If the parameter I<expected_content_type>
-is not NULL then the client will check that the given content type string
+
+If the I<expected_content_type> argument is not NULL,
+the client will check that the specified content-type string
 is included in the HTTP header of the response and return an error if not.
+In the content-type header line the specified string should be present either
+as a whole, or in case the specified string does not include a C<;> character,
+it is sufficient that the specified string appears as a prefix
+in the header line, followed by a C<;> character and any further text.
+For instance, if I<expected_content_type> specifies C<text/html>,
+this is matched by C<text/html>, C<text/html; charset=UTF-8>, etc.
+
 If the I<expect_asn1> parameter is nonzero,
 a structure in ASN.1 encoding will be expected as response content.
 The I<max_resp_len> parameter specifies the maximum allowed
@@ -202,7 +210,7 @@ an ASN.1-encoded response is expected, which should include a total length,
 the length indications received are checked for consistency
 and for not exceeding any given maximum response length.
 If an ASN.1-encoded response is expected, the function returns on success
-the contents as a memory BIO, which does not support streaming.
+the contents buffered in a memory BIO, which does not support streaming.
 Otherwise it returns directly the read BIO that holds the response contents,
 which allows a response of indefinite length and may support streaming.
 The caller is responsible for freeing the BIO pointer obtained.
@@ -257,8 +265,8 @@ OSSL_HTTP_proxy_connect() and OSSL_HTTP_set1_request()
 return 1 on success, 0 on error.
 
 On success, OSSL_HTTP_exchange(), OSSL_HTTP_get(), and OSSL_HTTP_transfer()
-return a memory BIO containing the data received if an ASN.1-encoded response
-is expected, else a BIO that may support streaming.
+return a memory BIO that buffers all the data received if an ASN.1-encoded
+response is expected, otherwise a BIO that may support streaming.
 The BIO must be freed by the caller.
 On failure, they return NULL.
 Failure conditions include connection/transfer timeout, parse errors, etc.

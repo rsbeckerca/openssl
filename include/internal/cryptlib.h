@@ -19,6 +19,7 @@
 # endif
 
 # include "internal/common.h"
+# include "crypto/asn1.h"
 
 # include <openssl/crypto.h>
 # include <openssl/buffer.h>
@@ -30,7 +31,7 @@ typedef struct ex_callback_st EX_CALLBACK;
 DEFINE_STACK_OF(EX_CALLBACK)
 
 typedef struct mem_st MEM;
-DEFINE_LHASH_OF(MEM);
+DEFINE_LHASH_OF_EX(MEM);
 
 void OPENSSL_cpuid_setup(void);
 #if defined(__i386)   || defined(__i386__)   || defined(_M_IX86) || \
@@ -115,7 +116,8 @@ typedef struct ossl_ex_data_global_st {
 # define OSSL_LIB_CTX_PROVIDER_CONF_INDEX           16
 # define OSSL_LIB_CTX_BIO_CORE_INDEX                17
 # define OSSL_LIB_CTX_CHILD_PROVIDER_INDEX          18
-# define OSSL_LIB_CTX_MAX_INDEXES                   19
+# define OSSL_LIB_CTX_THREAD_INDEX                  19
+# define OSSL_LIB_CTX_MAX_INDEXES                   20
 
 OSSL_LIB_CTX *ossl_lib_ctx_get_concrete(OSSL_LIB_CTX *ctx);
 int ossl_lib_ctx_is_default(OSSL_LIB_CTX *ctx);

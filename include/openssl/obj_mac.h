@@ -890,6 +890,10 @@
 #define NID_id_ct_ASPA          1250
 #define OBJ_id_ct_ASPA          OBJ_id_smime_ct,49L
 
+#define SN_id_ct_signedTAL              "id-ct-signedTAL"
+#define NID_id_ct_signedTAL             1284
+#define OBJ_id_ct_signedTAL             OBJ_id_smime_ct,50L
+
 #define SN_id_smime_aa_receiptRequest           "id-smime-aa-receiptRequest"
 #define NID_id_smime_aa_receiptRequest          212
 #define OBJ_id_smime_aa_receiptRequest          OBJ_id_smime_aa,1L
@@ -1006,9 +1010,21 @@
 #define NID_id_smime_aa_dvcs_dvc                240
 #define OBJ_id_smime_aa_dvcs_dvc                OBJ_id_smime_aa,29L
 
+#define SN_id_aa_ets_attrCertificateRefs                "id-aa-ets-attrCertificateRefs"
+#define NID_id_aa_ets_attrCertificateRefs               1261
+#define OBJ_id_aa_ets_attrCertificateRefs               OBJ_id_smime_aa,44L
+
+#define SN_id_aa_ets_attrRevocationRefs         "id-aa-ets-attrRevocationRefs"
+#define NID_id_aa_ets_attrRevocationRefs                1262
+#define OBJ_id_aa_ets_attrRevocationRefs                OBJ_id_smime_aa,45L
+
 #define SN_id_smime_aa_signingCertificateV2             "id-smime-aa-signingCertificateV2"
 #define NID_id_smime_aa_signingCertificateV2            1086
 #define OBJ_id_smime_aa_signingCertificateV2            OBJ_id_smime_aa,47L
+
+#define SN_id_aa_ets_archiveTimestampV2         "id-aa-ets-archiveTimestampV2"
+#define NID_id_aa_ets_archiveTimestampV2                1280
+#define OBJ_id_aa_ets_archiveTimestampV2                OBJ_id_smime_aa,48L
 
 #define SN_id_smime_alg_ESDHwith3DES            "id-smime-alg-ESDHwith3DES"
 #define NID_id_smime_alg_ESDHwith3DES           241
@@ -1111,6 +1127,10 @@
 #define LN_x509Crl              "x509Crl"
 #define NID_x509Crl             160
 #define OBJ_x509Crl             OBJ_crlTypes,1L
+
+#define SN_id_aa_CMSAlgorithmProtection         "id-aa-CMSAlgorithmProtection"
+#define NID_id_aa_CMSAlgorithmProtection                1263
+#define OBJ_id_aa_CMSAlgorithmProtection                OBJ_pkcs9,52L
 
 #define OBJ_pkcs12              OBJ_pkcs,12L
 
@@ -1220,6 +1240,10 @@
 #define LN_SM2_with_SM3         "SM2-with-SM3"
 #define NID_SM2_with_SM3                1204
 #define OBJ_SM2_with_SM3                OBJ_sm_scheme,501L
+
+#define LN_hmacWithSM3          "hmacWithSM3"
+#define NID_hmacWithSM3         1281
+#define OBJ_hmacWithSM3         OBJ_sm3,3L,1L
 
 #define LN_hmacWithSHA224               "hmacWithSHA224"
 #define NID_hmacWithSHA224              798
@@ -3264,6 +3288,70 @@
 #define NID_hold_instruction_reject             433
 #define OBJ_hold_instruction_reject             OBJ_holdInstruction,3L
 
+#define SN_itu_t_identified_organization                "itu-t-identified-organization"
+#define NID_itu_t_identified_organization               1264
+#define OBJ_itu_t_identified_organization               OBJ_itu_t,4L
+
+#define SN_etsi         "etsi"
+#define NID_etsi                1265
+#define OBJ_etsi                OBJ_itu_t_identified_organization,0L
+
+#define SN_electronic_signature_standard                "electronic-signature-standard"
+#define NID_electronic_signature_standard               1266
+#define OBJ_electronic_signature_standard               OBJ_etsi,1733L
+
+#define SN_ess_attributes               "ess-attributes"
+#define NID_ess_attributes              1267
+#define OBJ_ess_attributes              OBJ_electronic_signature_standard,2L
+
+#define SN_id_aa_ets_mimeType           "id-aa-ets-mimeType"
+#define NID_id_aa_ets_mimeType          1268
+#define OBJ_id_aa_ets_mimeType          OBJ_ess_attributes,1L
+
+#define SN_id_aa_ets_longTermValidation         "id-aa-ets-longTermValidation"
+#define NID_id_aa_ets_longTermValidation                1269
+#define OBJ_id_aa_ets_longTermValidation                OBJ_ess_attributes,2L
+
+#define SN_id_aa_ets_SignaturePolicyDocument            "id-aa-ets-SignaturePolicyDocument"
+#define NID_id_aa_ets_SignaturePolicyDocument           1270
+#define OBJ_id_aa_ets_SignaturePolicyDocument           OBJ_ess_attributes,3L
+
+#define SN_id_aa_ets_archiveTimestampV3         "id-aa-ets-archiveTimestampV3"
+#define NID_id_aa_ets_archiveTimestampV3                1271
+#define OBJ_id_aa_ets_archiveTimestampV3                OBJ_ess_attributes,4L
+
+#define SN_id_aa_ATSHashIndex           "id-aa-ATSHashIndex"
+#define NID_id_aa_ATSHashIndex          1272
+#define OBJ_id_aa_ATSHashIndex          OBJ_ess_attributes,5L
+
+#define SN_cades                "cades"
+#define NID_cades               1273
+#define OBJ_cades               OBJ_etsi,19122L
+
+#define SN_cades_attributes             "cades-attributes"
+#define NID_cades_attributes            1274
+#define OBJ_cades_attributes            OBJ_cades,1L
+
+#define SN_id_aa_ets_signerAttrV2               "id-aa-ets-signerAttrV2"
+#define NID_id_aa_ets_signerAttrV2              1275
+#define OBJ_id_aa_ets_signerAttrV2              OBJ_cades_attributes,1L
+
+#define SN_id_aa_ets_sigPolicyStore             "id-aa-ets-sigPolicyStore"
+#define NID_id_aa_ets_sigPolicyStore            1276
+#define OBJ_id_aa_ets_sigPolicyStore            OBJ_cades_attributes,3L
+
+#define SN_id_aa_ATSHashIndex_v2                "id-aa-ATSHashIndex-v2"
+#define NID_id_aa_ATSHashIndex_v2               1277
+#define OBJ_id_aa_ATSHashIndex_v2               OBJ_cades_attributes,4L
+
+#define SN_id_aa_ATSHashIndex_v3                "id-aa-ATSHashIndex-v3"
+#define NID_id_aa_ATSHashIndex_v3               1278
+#define OBJ_id_aa_ATSHashIndex_v3               OBJ_cades_attributes,5L
+
+#define SN_signedAssertion              "signedAssertion"
+#define NID_signedAssertion             1279
+#define OBJ_signedAssertion             OBJ_cades_attributes,6L
+
 #define SN_data         "data"
 #define NID_data                434
 #define OBJ_data                OBJ_itu_t,9L
@@ -5006,6 +5094,11 @@
 #define NID_sm4_ccm             1249
 #define OBJ_sm4_ccm             OBJ_sm_scheme,104L,9L
 
+#define SN_sm4_xts              "SM4-XTS"
+#define LN_sm4_xts              "sm4-xts"
+#define NID_sm4_xts             1290
+#define OBJ_sm4_xts             OBJ_sm_scheme,104L,10L
+
 #define SN_hmac         "HMAC"
 #define LN_hmac         "hmac"
 #define NID_hmac                855
@@ -5083,6 +5176,9 @@
 #define NID_brainpoolP256r1             927
 #define OBJ_brainpoolP256r1             1L,3L,36L,3L,3L,2L,8L,1L,1L,7L
 
+#define SN_brainpoolP256r1tls13         "brainpoolP256r1tls13"
+#define NID_brainpoolP256r1tls13                1285
+
 #define SN_brainpoolP256t1              "brainpoolP256t1"
 #define NID_brainpoolP256t1             928
 #define OBJ_brainpoolP256t1             1L,3L,36L,3L,3L,2L,8L,1L,1L,8L
@@ -5099,6 +5195,9 @@
 #define NID_brainpoolP384r1             931
 #define OBJ_brainpoolP384r1             1L,3L,36L,3L,3L,2L,8L,1L,1L,11L
 
+#define SN_brainpoolP384r1tls13         "brainpoolP384r1tls13"
+#define NID_brainpoolP384r1tls13                1286
+
 #define SN_brainpoolP384t1              "brainpoolP384t1"
 #define NID_brainpoolP384t1             932
 #define OBJ_brainpoolP384t1             1L,3L,36L,3L,3L,2L,8L,1L,1L,12L
@@ -5106,6 +5205,9 @@
 #define SN_brainpoolP512r1              "brainpoolP512r1"
 #define NID_brainpoolP512r1             933
 #define OBJ_brainpoolP512r1             1L,3L,36L,3L,3L,2L,8L,1L,1L,13L
+
+#define SN_brainpoolP512r1tls13         "brainpoolP512r1tls13"
+#define NID_brainpoolP512r1tls13                1287
 
 #define SN_brainpoolP512t1              "brainpoolP512t1"
 #define NID_brainpoolP512t1             934
@@ -5485,6 +5587,24 @@
 #define SN_aes_256_siv          "AES-256-SIV"
 #define LN_aes_256_siv          "aes-256-siv"
 #define NID_aes_256_siv         1200
+
+#define SN_oracle               "oracle-organization"
+#define LN_oracle               "Oracle organization"
+#define NID_oracle              1282
+#define OBJ_oracle              OBJ_joint_iso_itu_t,16L,840L,1L,113894L
+
+#define SN_oracle_jdk_trustedkeyusage           "oracle-jdk-trustedkeyusage"
+#define LN_oracle_jdk_trustedkeyusage           "Trusted key usage (Oracle)"
+#define NID_oracle_jdk_trustedkeyusage          1283
+#define OBJ_oracle_jdk_trustedkeyusage          OBJ_oracle,746875L,1L,1L
+
+#define SN_brotli               "brotli"
+#define LN_brotli               "Brotli compression"
+#define NID_brotli              1288
+
+#define SN_zstd         "zstd"
+#define LN_zstd         "Zstandard compression"
+#define NID_zstd                1289
 
 #endif /* OPENSSL_OBJ_MAC_H */
 

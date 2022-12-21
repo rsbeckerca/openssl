@@ -28,6 +28,8 @@
 
 # elif defined(OPENSSL_SYS_WINDOWS) || defined(OPENSSL_SYS_MSDOS)
 #  if defined(__DJGPP__)
+#   define WATT32
+#   define WATT32_NO_OLDIES
 #   include <sys/socket.h>
 #   include <sys/un.h>
 #   include <tcp.h>
@@ -59,7 +61,25 @@ struct servent *PASCAL getservbyname(const char *, const char *);
 #   define accept(s,f,l)   ((int)accept(s,f,l))
 #  endif
 
+/* Windows have other names for shutdown() reasons */
+#  ifndef SHUT_RD
+#   define SHUT_RD SD_RECEIVE
+#  endif
+#  ifndef SHUT_WR
+#   define SHUT_WR SD_SEND
+#  endif
+#  ifndef SHUT_RDWR
+#   define SHUT_RDWR SD_BOTH
+#  endif
+
 # else
+#  if defined(__APPLE__)
+    /*
+     * This must be defined before including <netinet/in6.h> to get
+     * IPV6_RECVPKTINFO
+     */
+#   define __APPLE_USE_RFC_3542
+#  endif
 
 #  ifndef NO_SYS_PARAM_H
 #   include <sys/param.h>
@@ -75,7 +95,7 @@ struct servent *PASCAL getservbyname(const char *, const char *);
 #   include <inet.h>
 #  else
 #   include <sys/socket.h>
-#   ifndef NO_SYS_UN_H
+#   if !defined(NO_SYS_UN_H) && defined(AF_UNIX) && !defined(OPENSSL_NO_UNIX_SOCK)
 #    include <sys/un.h>
 #    ifndef UNIX_PATH_MAX
 #     define UNIX_PATH_MAX sizeof(((struct sockaddr_un *)NULL)->sun_path)
@@ -123,6 +143,15 @@ struct servent *PASCAL getservbyname(const char *, const char *);
 #  endif
 # endif
 
+/*
+ * Some platforms define AF_UNIX, but don't support it
+ */
+# if !defined(OPENSSL_NO_UNIX_SOCK)
+#  if !defined(AF_UNIX) || defined(NO_SYS_UN_H)
+#   define OPENSSL_NO_UNIX_SOCK
+#  endif
+# endif
+
 # define get_last_socket_error() errno
 # define clear_socket_error()    errno=0
 
@@ -134,8 +163,6 @@ struct servent *PASCAL getservbyname(const char *, const char *);
 #  define readsocket(s,b,n)       recv((s),(b),(n),0)
 #  define writesocket(s,b,n)      send((s),(b),(n),0)
 # elif defined(__DJGPP__)
-#  define WATT32
-#  define WATT32_NO_OLDIES
 #  define closesocket(s)          close_s(s)
 #  define readsocket(s,b,n)       read_s(s,b,n)
 #  define writesocket(s,b,n)      send(s,b,n,0)

@@ -49,9 +49,12 @@ static int collect_numbers(STACK_OF(BIGNUM) *numbers,
         if (p != NULL) {
             BIGNUM *tmp = NULL;
 
-            if (!OSSL_PARAM_get_BN(p, &tmp)
-                || sk_BIGNUM_push(numbers, tmp) == 0)
+            if (!OSSL_PARAM_get_BN(p, &tmp))
                 return 0;
+            if (sk_BIGNUM_push(numbers, tmp) == 0) {
+                BN_clear_free(tmp);
+                return 0;
+            }
         }
     }
 
@@ -398,10 +401,8 @@ RSA *ossl_rsa_dup(const RSA *rsa, int selection)
             const RSA_PRIME_INFO *pinfo = NULL;
             RSA_PRIME_INFO *duppinfo = NULL;
 
-            if ((duppinfo = OPENSSL_zalloc(sizeof(*duppinfo))) == NULL) {
-                ERR_raise(ERR_LIB_RSA, ERR_R_MALLOC_FAILURE);
+            if ((duppinfo = OPENSSL_zalloc(sizeof(*duppinfo))) == NULL)
                 goto err;
-            }
             /* push first so cleanup in error case works */
             (void)sk_RSA_PRIME_INFO_push(dupkey->prime_infos, duppinfo);
 

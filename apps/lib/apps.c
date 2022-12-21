@@ -301,6 +301,7 @@ static char *app_get_pass(const char *arg, int keepbio)
             pwdbio = BIO_push(btmp, pwdbio);
 #endif
         } else if (strcmp(arg, "stdin") == 0) {
+            unbuffer(stdin);
             pwdbio = dup_bio_in(FORMAT_TEXT);
             if (pwdbio == NULL) {
                 BIO_printf(bio_err, "Can't open BIO for stdin\n");
@@ -496,6 +497,7 @@ X509_CRL *load_crl(const char *uri, int format, int maybe_stdin,
     return crl;
 }
 
+/* Could be simplified if OSSL_STORE supported CSRs, see FR #15725 */
 X509_REQ *load_csr(const char *file, int format, const char *desc)
 {
     X509_REQ *req = NULL;
@@ -503,8 +505,6 @@ X509_REQ *load_csr(const char *file, int format, const char *desc)
 
     if (format == FORMAT_UNDEF)
         format = FORMAT_PEM;
-    if (desc == NULL)
-        desc = "CSR";
     in = bio_open_default(file, 'r', format);
     if (in == NULL)
         goto end;
@@ -519,10 +519,46 @@ X509_REQ *load_csr(const char *file, int format, const char *desc)
  end:
     if (req == NULL) {
         ERR_print_errors(bio_err);
-        BIO_printf(bio_err, "Unable to load %s\n", desc);
+        if (desc != NULL)
+            BIO_printf(bio_err, "Unable to load %s\n", desc);
     }
     BIO_free(in);
     return req;
+}
+
+/* Better extend OSSL_STORE to support CSRs, see FR #15725 */
+X509_REQ *load_csr_autofmt(const char *infile, int format, const char *desc)
+{
+    X509_REQ *csr;
+
+    if (format != FORMAT_UNDEF) {
+        csr = load_csr(infile, format, desc);
+    } else { /* try PEM, then DER */
+        BIO *bio_bak = bio_err;
+
+        bio_err = NULL; /* do not show errors on more than one try */
+        csr = load_csr(infile, FORMAT_PEM, NULL /* desc */);
+        bio_err = bio_bak;
+        if (csr == NULL) {
+            ERR_clear_error();
+            csr = load_csr(infile, FORMAT_ASN1, NULL /* desc */);
+        }
+        if (csr == NULL) {
+            BIO_printf(bio_err, "error: unable to load %s from file '%s'\n",
+                       desc, infile);
+        }
+    }
+    if (csr != NULL) {
+        EVP_PKEY *pkey = X509_REQ_get0_pubkey(csr);
+        int ret = do_X509_REQ_verify(csr, pkey, NULL /* vfyopts */);
+
+        if (pkey == NULL || ret < 0)
+            BIO_puts(bio_err, "Warning: error while verifying CSR self-signature");
+        else if (ret == 0)
+            BIO_puts(bio_err, "Warning: CSR self-signature does not match the contents");
+        return csr;
+    }
+    return csr;
 }
 
 void cleanse(char *str)
@@ -977,7 +1013,7 @@ int load_key_certs_crls(const char *uri, int format, int maybe_stdin,
              * so if the caller asked for a public key, and we got a private
              * key, we can still pass it back.
              */
-            /* fall thru */
+            /* fall through */
         case OSSL_STORE_INFO_PUBKEY:
             if (ppubkey != NULL) {
                 ok = (*ppubkey = OSSL_STORE_INFO_get1_PUBKEY(info)) != NULL;
@@ -1148,7 +1184,9 @@ int set_dateopt(unsigned long *dateopt, const char *arg)
         *dateopt = ASN1_DTFLGS_RFC822;
     else if (OPENSSL_strcasecmp(arg, "iso_8601") == 0)
         *dateopt = ASN1_DTFLGS_ISO8601;
-    return 0;
+    else
+        return 0;
+    return 1;
 }
 
 int set_ext_copy(int *copy_type, const char *arg)
@@ -1332,8 +1370,8 @@ X509_STORE *setup_verify(const char *CAfile, int noCAfile,
         if (lookup == NULL)
             goto end;
         if (CAfile != NULL) {
-            if (!X509_LOOKUP_load_file_ex(lookup, CAfile, X509_FILETYPE_PEM,
-                                          libctx, propq)) {
+            if (X509_LOOKUP_load_file_ex(lookup, CAfile, X509_FILETYPE_PEM,
+                                          libctx, propq) <= 0) {
                 BIO_printf(bio_err, "Error loading file %s\n", CAfile);
                 goto end;
             }
@@ -1348,7 +1386,7 @@ X509_STORE *setup_verify(const char *CAfile, int noCAfile,
         if (lookup == NULL)
             goto end;
         if (CApath != NULL) {
-            if (!X509_LOOKUP_add_dir(lookup, CApath, X509_FILETYPE_PEM)) {
+            if (X509_LOOKUP_add_dir(lookup, CApath, X509_FILETYPE_PEM) <= 0) {
                 BIO_printf(bio_err, "Error loading directory %s\n", CApath);
                 goto end;
             }
@@ -1417,7 +1455,8 @@ static IMPLEMENT_LHASH_HASH_FN(index_name, OPENSSL_CSTRING)
 static IMPLEMENT_LHASH_COMP_FN(index_name, OPENSSL_CSTRING)
 #undef BSIZE
 #define BSIZE 256
-BIGNUM *load_serial(const char *serialfile, int create, ASN1_INTEGER **retai)
+BIGNUM *load_serial(const char *serialfile, int *exists, int create,
+                    ASN1_INTEGER **retai)
 {
     BIO *in = NULL;
     BIGNUM *ret = NULL;
@@ -1429,6 +1468,8 @@ BIGNUM *load_serial(const char *serialfile, int create, ASN1_INTEGER **retai)
         goto err;
 
     in = BIO_new_file(serialfile, "r");
+    if (exists != NULL)
+        *exists = in != NULL;
     if (in == NULL) {
         if (!create) {
             perror(serialfile);
@@ -1436,8 +1477,14 @@ BIGNUM *load_serial(const char *serialfile, int create, ASN1_INTEGER **retai)
         }
         ERR_clear_error();
         ret = BN_new();
-        if (ret == NULL || !rand_serial(ret, ai))
+        if (ret == NULL) {
             BIO_printf(bio_err, "Out of memory\n");
+        } else if (!rand_serial(ret, ai)) {
+            BIO_printf(bio_err, "Error creating random number to store in %s\n",
+                       serialfile);
+            BN_free(ret);
+            ret = NULL;
+        }
     } else {
         if (!a2i_ASN1_INTEGER(in, ai, buf, 1024)) {
             BIO_printf(bio_err, "Unable to load number from %s\n",
@@ -1451,12 +1498,13 @@ BIGNUM *load_serial(const char *serialfile, int create, ASN1_INTEGER **retai)
         }
     }
 
-    if (ret && retai) {
+    if (ret != NULL && retai != NULL) {
         *retai = ai;
         ai = NULL;
     }
  err:
-    ERR_print_errors(bio_err);
+    if (ret == NULL)
+        ERR_print_errors(bio_err);
     BIO_free(in);
     ASN1_INTEGER_free(ai);
     return ret;
@@ -2424,7 +2472,7 @@ static const char *tls_error_hint(void)
     if (ERR_GET_LIB(err) != ERR_LIB_SSL)
         err = ERR_peek_last_error();
     if (ERR_GET_LIB(err) != ERR_LIB_SSL)
-        return NULL;
+        return NULL; /* likely no TLS error */
 
     switch (ERR_GET_REASON(err)) {
     case SSL_R_WRONG_VERSION_NUMBER:
@@ -2437,9 +2485,27 @@ static const char *tls_error_hint(void)
         return "Server did not accept our TLS certificate, likely due to mismatch with server's trust anchor or missing revocation status";
     case SSL_AD_REASON_OFFSET + SSL3_AD_HANDSHAKE_FAILURE:
         return "TLS handshake failure. Possibly the server requires our TLS certificate but did not receive it";
-    default: /* no error or no hint available for error */
-        return NULL;
+    default:
+        return NULL; /* no hint available for TLS error */
     }
+}
+
+static BIO *http_tls_shutdown(BIO *bio)
+{
+    if (bio != NULL) {
+        BIO *cbio;
+        const char *hint = tls_error_hint();
+
+        if (hint != NULL)
+            BIO_printf(bio_err, "%s\n", hint);
+        (void)ERR_set_mark();
+        BIO_ssl_shutdown(bio);
+        cbio = BIO_pop(bio); /* connect+HTTP BIO */
+        BIO_free(bio); /* SSL BIO */
+        (void)ERR_pop_to_mark(); /* hide SSL_R_READ_BIO_NOT_SET etc. */
+        bio = cbio;
+    }
+    return bio;
 }
 
 /* HTTP callback function that supports TLS connection also via HTTPS proxy */
@@ -2448,7 +2514,9 @@ BIO *app_http_tls_cb(BIO *bio, void *arg, int connect, int detail)
     APP_HTTP_TLS_INFO *info = (APP_HTTP_TLS_INFO *)arg;
     SSL_CTX *ssl_ctx = info->ssl_ctx;
 
-    if (connect && detail) { /* connecting with TLS */
+    if (ssl_ctx == NULL) /* not using TLS */
+        return bio;
+    if (connect) {
         SSL *ssl;
         BIO *sbio = NULL;
 
@@ -2460,7 +2528,7 @@ BIO *app_http_tls_cb(BIO *bio, void *arg, int connect, int detail)
                 || (sbio = BIO_new(BIO_f_ssl())) == NULL) {
             return NULL;
         }
-        if (ssl_ctx == NULL || (ssl = SSL_new(ssl_ctx)) == NULL) {
+        if ((ssl = SSL_new(ssl_ctx)) == NULL) {
             BIO_free(sbio);
             return NULL;
         }
@@ -2472,24 +2540,8 @@ BIO *app_http_tls_cb(BIO *bio, void *arg, int connect, int detail)
         BIO_set_ssl(sbio, ssl, BIO_CLOSE);
 
         bio = BIO_push(sbio, bio);
-    }
-    if (!connect) {
-        const char *hint;
-        BIO *cbio;
-
-        if (!detail) { /* disconnecting after error */
-            hint = tls_error_hint();
-            if (hint != NULL)
-                ERR_add_error_data(2, " : ", hint);
-        }
-        if (ssl_ctx != NULL) {
-            (void)ERR_set_mark();
-            BIO_ssl_shutdown(bio);
-            cbio = BIO_pop(bio); /* connect+HTTP BIO */
-            BIO_free(bio); /* SSL BIO */
-            (void)ERR_pop_to_mark(); /* hide SSL_R_READ_BIO_NOT_SET etc. */
-            bio = cbio;
-        }
+    } else { /* disconnect from TLS */
+        bio = http_tls_shutdown(bio);
     }
     return bio;
 }
@@ -2526,6 +2578,11 @@ ASN1_VALUE *app_http_get_asn1(const char *url, const char *proxy,
     if (use_ssl && ssl_ctx == NULL) {
         ERR_raise_data(ERR_LIB_HTTP, ERR_R_PASSED_NULL_PARAMETER,
                        "missing SSL_CTX");
+        goto end;
+    }
+    if (!use_ssl && ssl_ctx != NULL) {
+        ERR_raise_data(ERR_LIB_HTTP, ERR_R_PASSED_INVALID_ARGUMENT,
+                       "SSL_CTX given but use_ssl == 0");
         goto end;
     }
 
@@ -2916,6 +2973,9 @@ BIO *dup_bio_out(int format)
                         BIO_NOCLOSE | (FMT_istext(format) ? BIO_FP_TEXT : 0));
     void *prefix = NULL;
 
+    if (b == NULL)
+        return NULL;
+
 #ifdef OPENSSL_SYS_VMS
     if (FMT_istext(format))
         b = BIO_push(BIO_new(BIO_f_linebuffer()), b);
@@ -2936,7 +2996,7 @@ BIO *dup_bio_err(int format)
                         BIO_NOCLOSE | (FMT_istext(format) ? BIO_FP_TEXT : 0));
 
 #ifdef OPENSSL_SYS_VMS
-    if (FMT_istext(format))
+    if (b != NULL && FMT_istext(format))
         b = BIO_push(BIO_new(BIO_f_linebuffer()), b);
 #endif
     return b;
@@ -3346,14 +3406,6 @@ int opt_legacy_okay(void)
 {
     int provider_options = opt_provider_option_given();
     int libctx = app_get0_libctx() != NULL || app_get0_propq() != NULL;
-#ifndef OPENSSL_NO_ENGINE
-    ENGINE *e = ENGINE_get_first();
-
-    if (e != NULL) {
-        ENGINE_free(e);
-        return 1;
-    }
-#endif
     /*
      * Having a provider option specified or a custom library context or
      * property query, is a sure sign we're not using legacy.

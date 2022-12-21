@@ -17,6 +17,7 @@
 #include <openssl/proverr.h>
 #include "internal/packet.h"
 #include "internal/der.h"
+#include "internal/nelem.h"
 #include "prov/provider_ctx.h"
 #include "prov/providercommon.h"
 #include "prov/implementations.h"
@@ -333,10 +334,10 @@ static void *x942kdf_new(void *provctx)
     KDF_X942 *ctx;
 
     if (!ossl_prov_is_running())
-        return 0;
+        return NULL;
 
     if ((ctx = OPENSSL_zalloc(sizeof(*ctx))) == NULL)
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        return NULL;
     ctx->provctx = provctx;
     ctx->use_keybits = 1;
     return ctx;

@@ -11,6 +11,9 @@ name: Run-checker daily
 on:
   schedule:
     - cron: '0 6 * * *'
+permissions:
+  contents: read
+
 jobs:
   run-checker:
     strategy:
@@ -95,7 +98,6 @@ jobs:
           no-ripemd,
           no-rmd160,
           no-scrypt,
-          no-sctp,
           no-secure-memory,
           no-seed,
           no-shared,
@@ -133,7 +135,7 @@ jobs:
         ]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: config
       run: CC=clang ./config --banner=Configured --strict-warnings ${{ matrix.opt }}
     - name: config dump

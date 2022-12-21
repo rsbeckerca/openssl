@@ -34,6 +34,11 @@ CN="Test S/MIME EE RSA #3" $OPENSSL req -config ca.cnf -noenc \
 $OPENSSL x509 -req -in req.pem -CA smroot.pem -days 36500 \
 	-extfile ca.cnf -extensions usr_cert -CAcreateserial >>smrsa3.pem
 
+CN="Test S/MIME EE RSA 1024" $OPENSSL req -config ca.cnf -noenc \
+	-keyout smrsa1024.pem -out req.pem -newkey rsa:1024
+$OPENSSL x509 -req -in req.pem -CA smroot.pem -days 36500 \
+	-extfile ca.cnf -extensions usr_cert -CAcreateserial >>smrsa1024.pem
+
 # Create DSA parameters
 
 $OPENSSL dsaparam -out dsap.pem 2048
@@ -81,5 +86,14 @@ CN="Test S/MIME EE DH #1" $OPENSSL req -config ca.cnf -noenc \
 $OPENSSL x509 -req -in req.pem -CA smroot.pem -days 36500 \
 	-force_pubkey dhpub.pem \
 	-extfile ca.cnf -extensions usr_cert -CAcreateserial >>smdh.pem
+
+# EE RSA code signing certificates: create request first
+CN="Test CodeSign EE RSA #1" $OPENSSL req -config ca.cnf -noenc \
+	-new -out req.pem -key ../certs/ee-key.pem
+cat ../certs/ee-key.pem > csrsa1.pem
+# Sign request: end entity extensions
+$OPENSSL x509 -req -in req.pem -CA smroot.pem -days 36524 -extfile ca.cnf \
+	-extensions codesign_cert >>csrsa1.pem
+
 # Remove temp files.
 rm -f req.pem ecp.pem ecp2.pem dsap.pem dhp.pem dhpub.pem smtmp.pem smroot.srl

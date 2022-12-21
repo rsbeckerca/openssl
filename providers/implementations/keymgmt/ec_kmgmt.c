@@ -147,8 +147,10 @@ int key_to_params(const EC_KEY *eckey, OSSL_PARAM_BLD *tmpl,
 
         if (p != NULL || tmpl != NULL) {
             /* convert pub_point to a octet string according to the SECG standard */
+            point_conversion_form_t format = EC_KEY_get_conv_form(eckey);
+
             if ((pub_key_len = EC_POINT_point2buf(ecg, pub_point,
-                                                  POINT_CONVERSION_COMPRESSED,
+                                                  format,
                                                   pub_key, bnctx)) == 0
                 || !ossl_param_build_set_octet_string(tmpl, p,
                                                       OSSL_PKEY_PARAM_PUB_KEY,
@@ -496,12 +498,14 @@ int ec_export(void *keydata, int selection, OSSL_CALLBACK *param_cb,
     if ((selection & OSSL_KEYMGMT_SELECT_OTHER_PARAMETERS) != 0)
         ok = ok && otherparams_to_params(ec, tmpl, NULL);
 
-    if (ok && (params = OSSL_PARAM_BLD_to_param(tmpl)) != NULL)
-        ok = param_cb(params, cbarg);
-    else
+    if (!ok || (params = OSSL_PARAM_BLD_to_param(tmpl)) == NULL) {
         ok = 0;
-end:
+        goto end;
+    }
+
+    ok = param_cb(params, cbarg);
     OSSL_PARAM_free(params);
+end:
     OSSL_PARAM_BLD_free(tmpl);
     OPENSSL_free(pub_key);
     OPENSSL_free(genbuf);
@@ -523,7 +527,8 @@ end:
     OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_EC_GENERATOR, NULL, 0),            \
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_ORDER, NULL, 0),                          \
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_COFACTOR, NULL, 0),                       \
-    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_EC_SEED, NULL, 0)
+    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_EC_SEED, NULL, 0),                 \
+    OSSL_PARAM_int(OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAMS, NULL)
 
 # define EC_IMEXPORTABLE_PUBLIC_KEY                                            \
     OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_PUB_KEY, NULL, 0)
@@ -634,8 +639,10 @@ int common_get_params(void *key, OSSL_PARAM params[], int sm2)
     BN_CTX *bnctx = NULL;
 
     ecg = EC_KEY_get0_group(eck);
-    if (ecg == NULL)
+    if (ecg == NULL) {
+        ERR_raise(ERR_LIB_PROV, PROV_R_NO_PARAMETERS_SET);
         return 0;
+    }
 
     libctx = ossl_ec_key_get_libctx(eck);
     propq = ossl_ec_key_get0_propq(eck);
@@ -724,8 +731,13 @@ int common_get_params(void *key, OSSL_PARAM params[], int sm2)
     }
     if ((p = OSSL_PARAM_locate(params,
                                OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY)) != NULL) {
-        p->return_size = EC_POINT_point2oct(EC_KEY_get0_group(key),
-                                            EC_KEY_get0_public_key(key),
+        const EC_POINT *ecp = EC_KEY_get0_public_key(key);
+
+        if (ecp == NULL) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_NOT_A_PUBLIC_KEY);
+            goto err;
+        }
+        p->return_size = EC_POINT_point2oct(ecg, ecp,
                                             POINT_CONVERSION_UNCOMPRESSED,
                                             p->data, p->return_size, bnctx);
         if (p->return_size == 0)
@@ -936,7 +948,7 @@ int ec_validate(const void *keydata, int selection, int checktype)
 
         if ((flags & EC_FLAG_CHECK_NAMED_GROUP) != 0)
             ok = ok && EC_GROUP_check_named_curve(EC_KEY_get0_group(eck),
-                           (flags & EC_FLAG_CHECK_NAMED_GROUP_NIST) != 0, ctx);
+                           (flags & EC_FLAG_CHECK_NAMED_GROUP_NIST) != 0, ctx) > 0;
         else
             ok = ok && EC_GROUP_check(EC_KEY_get0_group(eck), ctx);
     }
@@ -971,6 +983,8 @@ struct ec_gen_ctx {
     int selection;
     int ecdh_mode;
     EC_GROUP *gen_group;
+    unsigned char *dhkem_ikm;
+    size_t dhkem_ikmlen;
 };
 
 static void *ec_gen_init(void *provctx, int selection,
@@ -1006,7 +1020,6 @@ static void *sm2_gen_init(void *provctx, int selection,
             return gctx;
         if ((gctx->group_name = OPENSSL_strdup("sm2")) != NULL)
             return gctx;
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
         ec_gen_cleanup(gctx);
     }
     return NULL;
@@ -1103,6 +1116,9 @@ static int ec_gen_set_params(void *genctx, const OSSL_PARAM params[])
     COPY_OCTET_PARAM(params, OSSL_PKEY_PARAM_EC_SEED, gctx->seed, gctx->seed_len);
     COPY_OCTET_PARAM(params, OSSL_PKEY_PARAM_EC_GENERATOR, gctx->gen,
                      gctx->gen_len);
+
+    COPY_OCTET_PARAM(params, OSSL_PKEY_PARAM_DHKEM_IKM, gctx->dhkem_ikm,
+                     gctx->dhkem_ikmlen);
 
     ret = 1;
 err:
@@ -1203,6 +1219,7 @@ static const OSSL_PARAM *ec_gen_settable_params(ossl_unused void *genctx,
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_ORDER, NULL, 0),
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_COFACTOR, NULL, 0),
         OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_EC_SEED, NULL, 0),
+        OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_DHKEM_IKM, NULL, 0),
         OSSL_PARAM_END
     };
 
@@ -1256,14 +1273,22 @@ static void *ec_gen(void *genctx, OSSL_CALLBACK *osslcb, void *cbarg)
     ret = ec_gen_assign_group(ec, gctx->gen_group);
 
     /* Whether you want it or not, you get a keypair, not just one half */
-    if ((gctx->selection & OSSL_KEYMGMT_SELECT_KEYPAIR) != 0)
-        ret = ret && EC_KEY_generate_key(ec);
+    if ((gctx->selection & OSSL_KEYMGMT_SELECT_KEYPAIR) != 0) {
+#ifndef FIPS_MODULE
+        if (gctx->dhkem_ikm != NULL && gctx->dhkem_ikmlen != 0)
+            ret = ret && ossl_ec_generate_key_dhkem(ec, gctx->dhkem_ikm,
+                                                    gctx->dhkem_ikmlen);
+        else
+#endif
+            ret = ret && EC_KEY_generate_key(ec);
+    }
 
     if (gctx->ecdh_mode != -1)
         ret = ret && ossl_ec_set_ecdh_cofactor_mode(ec, gctx->ecdh_mode);
 
     if (gctx->group_check != NULL)
-        ret = ret && ossl_ec_set_check_group_type_from_name(ec, gctx->group_check);
+        ret = ret && ossl_ec_set_check_group_type_from_name(ec,
+                                                            gctx->group_check);
     if (ret)
         return ec;
 err:
@@ -1331,6 +1356,7 @@ static void ec_gen_cleanup(void *genctx)
     if (gctx == NULL)
         return;
 
+    OPENSSL_clear_free(gctx->dhkem_ikm, gctx->dhkem_ikmlen);
     EC_GROUP_free(gctx->gen_group);
     BN_free(gctx->p);
     BN_free(gctx->a);

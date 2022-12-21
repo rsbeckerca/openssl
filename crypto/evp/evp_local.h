@@ -228,6 +228,8 @@ struct evp_kem_st {
     OSSL_FUNC_kem_gettable_ctx_params_fn *gettable_ctx_params;
     OSSL_FUNC_kem_set_ctx_params_fn *set_ctx_params;
     OSSL_FUNC_kem_settable_ctx_params_fn *settable_ctx_params;
+    OSSL_FUNC_kem_auth_encapsulate_init_fn *auth_encapsulate_init;
+    OSSL_FUNC_kem_auth_decapsulate_init_fn *auth_decapsulate_init;
 } /* EVP_KEM */;
 
 int PKCS5_v2_PBKDF2_keyivgen(EVP_CIPHER_CTX *ctx, const char *pass,
@@ -291,9 +293,6 @@ void evp_generic_do_all(OSSL_LIB_CTX *libctx, int operation_id,
 
 /* Internal fetchers for method types that are to be combined with others */
 EVP_KEYMGMT *evp_keymgmt_fetch_by_number(OSSL_LIB_CTX *ctx, int name_id,
-                                         const char *properties);
-EVP_KEYMGMT *evp_keymgmt_fetch_from_prov(OSSL_PROVIDER *prov,
-                                         const char *name,
                                          const char *properties);
 EVP_SIGNATURE *evp_signature_fetch_from_prov(OSSL_PROVIDER *prov,
                                              const char *name,

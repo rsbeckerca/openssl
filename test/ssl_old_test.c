@@ -310,6 +310,11 @@ static int cb_server_alpn(SSL *s, const unsigned char **out,
      * verify_alpn.
      */
     alpn_selected = OPENSSL_malloc(*outlen);
+    if (alpn_selected == NULL) {
+        fprintf(stderr, "failed to allocate memory\n");
+        OPENSSL_free(protos);
+        abort();
+    }
     memcpy(alpn_selected, *out, *outlen);
     *out = alpn_selected;
 
@@ -1309,17 +1314,15 @@ int main(int argc, char *argv[])
     if (comp == COMP_ZLIB)
         cm = COMP_zlib();
     if (cm != NULL) {
-        if (COMP_get_type(cm) != NID_undef) {
-            if (SSL_COMP_add_compression_method(comp, cm) != 0) {
-                fprintf(stderr, "Failed to add compression method\n");
-                ERR_print_errors_fp(stderr);
-            }
-        } else {
-            fprintf(stderr,
-                    "Warning: %s compression not supported\n",
-                    comp == COMP_ZLIB ? "zlib" : "unknown");
+        if (SSL_COMP_add_compression_method(comp, cm) != 0) {
+            fprintf(stderr, "Failed to add compression method\n");
             ERR_print_errors_fp(stderr);
         }
+    } else {
+        fprintf(stderr,
+                "Warning: %s compression not supported\n",
+                comp == COMP_ZLIB ? "zlib" : "unknown");
+        ERR_print_errors_fp(stderr);
     }
     ssl_comp_methods = SSL_COMP_get_compression_methods();
     n = sk_SSL_COMP_num(ssl_comp_methods);
@@ -1741,6 +1744,8 @@ int main(int argc, char *argv[])
         /* Use a fixed key so that we can decrypt the ticket. */
         size = SSL_CTX_set_tlsext_ticket_keys(s_ctx, NULL, 0);
         keys = OPENSSL_zalloc(size);
+        if (keys == NULL)
+            goto end;
         SSL_CTX_set_tlsext_ticket_keys(s_ctx, keys, size);
         OPENSSL_free(keys);
     }

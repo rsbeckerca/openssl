@@ -9,27 +9,30 @@ name: Run-checker merge
 # Jobs run per merge to master
 
 on: [push]
+permissions:
+  contents: read
+
 jobs:
   run-checker:
     strategy:
       fail-fast: false
       matrix:
         opt: [
-          enable-asan no-shared no-asm -DOPENSSL_SMALL_FOOTPRINT,
+          enable-asan enable-ubsan no-shared no-asm -DOPENSSL_SMALL_FOOTPRINT,
           no-dgram,
           no-dso,
           no-dynamic-engine,
           no-engine no-shared,
           no-err,
           no-filenames,
-          enable-ubsan no-asm -DPEDANTIC -DOPENSSL_SMALL_FOOTPRINT -fno-sanitize=alignment,
+          enable-ubsan no-asm -DOPENSSL_SMALL_FOOTPRINT -fno-sanitize=alignment,
           no-unit-test,
           enable-weak-ssl-ciphers,
           enable-zlib,
         ]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: config
       run: CC=clang ./config --banner=Configured --strict-warnings ${{ matrix.opt }}
     - name: config dump
