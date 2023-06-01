@@ -21,6 +21,8 @@
 # include "internal/bio_addr.h"
 # include "internal/time.h"
 
+# ifndef OPENSSL_NO_QUIC
+
 /*
  * QUIC TX Packetiser
  * ==================
@@ -40,6 +42,8 @@ typedef struct ossl_quic_tx_packetiser_args_st {
     QUIC_STREAM_MAP *qsm;       /* QUIC Streams Map */
     QUIC_TXFC       *conn_txfc; /* QUIC Connection-Level TX Flow Controller */
     QUIC_RXFC       *conn_rxfc; /* QUIC Connection-Level RX Flow Controller */
+    QUIC_RXFC       *max_streams_bidi_rxfc; /* QUIC RXFC for MAX_STREAMS generation */
+    QUIC_RXFC       *max_streams_uni_rxfc;
     const OSSL_CC_METHOD *cc_method; /* QUIC Congestion Controller */
     OSSL_CC_DATA    *cc_data;   /* QUIC Congestion Controller Instance */
     OSSL_TIME       (*now)(void *arg);  /* Callback to get current time. */
@@ -79,12 +83,29 @@ void ossl_quic_tx_packetiser_free(OSSL_QUIC_TX_PACKETISER *txp);
  * Returns TX_PACKETISER_RES_FAILURE on failure (e.g. allocation error),
  * TX_PACKETISER_RES_NO_PKT if no packets were sent (e.g. because nothing wants
  * to send anything), and TX_PACKETISER_RES_SENT_PKT if packets were sent.
+ *
+ * If an ACK-eliciting packet was sent, 1 is written to *sent_ack_eliciting,
+ * otherwise *sent_ack_eliciting is unchanged.
  */
 #define TX_PACKETISER_RES_FAILURE   0
 #define TX_PACKETISER_RES_NO_PKT    1
 #define TX_PACKETISER_RES_SENT_PKT  2
 int ossl_quic_tx_packetiser_generate(OSSL_QUIC_TX_PACKETISER *txp,
-                                     uint32_t archetype);
+                                     uint32_t archetype,
+                                     int *sent_ack_eliciting);
+
+/*
+ * Returns 1 if one or more packets would be generated if
+ * ossl_quic_tx_packetiser_generate were called.
+ *
+ * If TX_PACKETISER_BYPASS_CC is set in flags, congestion control is
+ * ignored for the purposes of making this determination.
+ */
+#define TX_PACKETISER_BYPASS_CC   (1U << 0)
+
+int ossl_quic_tx_packetiser_has_pending(OSSL_QUIC_TX_PACKETISER *txp,
+                                        uint32_t archetype,
+                                        uint32_t flags);
 
 /*
  * Set the token used in Initial packets. The callback is called when the buffer
@@ -121,6 +142,14 @@ int ossl_quic_tx_packetiser_set_peer(OSSL_QUIC_TX_PACKETISER *txp,
 int ossl_quic_tx_packetiser_discard_enc_level(OSSL_QUIC_TX_PACKETISER *txp,
                                               uint32_t enc_level);
 
+/*
+ * Informs the TX packetiser that the handshake is complete. The TX packetiser
+ * will not send 1-RTT application data until the handshake is complete,
+ * as the authenticity of the peer is not confirmed until the handshake
+ * complete event occurs.
+ */
+void ossl_quic_tx_packetiser_notify_handshake_complete(OSSL_QUIC_TX_PACKETISER *txp);
+
 /* Asks the TXP to generate a HANDSHAKE_DONE frame in the next 1-RTT packet. */
 void ossl_quic_tx_packetiser_schedule_handshake_done(OSSL_QUIC_TX_PACKETISER *txp);
 
@@ -137,5 +166,14 @@ void ossl_quic_tx_packetiser_schedule_ack_eliciting(OSSL_QUIC_TX_PACKETISER *txp
  */
 int ossl_quic_tx_packetiser_schedule_conn_close(OSSL_QUIC_TX_PACKETISER *txp,
                                                 const OSSL_QUIC_FRAME_CONN_CLOSE *f);
+
+/* Setters for the msg_callback and msg_callback_arg */
+void ossl_quic_tx_packetiser_set_msg_callback(OSSL_QUIC_TX_PACKETISER *txp,
+                                              ossl_msg_cb msg_callback,
+                                              SSL *msg_callback_ssl);
+void ossl_quic_tx_packetiser_set_msg_callback_arg(OSSL_QUIC_TX_PACKETISER *txp,
+                                                  void *msg_callback_arg);
+
+# endif
 
 #endif

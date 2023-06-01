@@ -47,6 +47,7 @@ struct helper {
     BIO                             *bio1, *bio2;
     QUIC_TXFC                       conn_txfc;
     QUIC_RXFC                       conn_rxfc, stream_rxfc;
+    QUIC_RXFC                       max_streams_bidi_rxfc, max_streams_uni_rxfc;
     OSSL_STATM                      statm;
     OSSL_CC_DATA                    *cc_data;
     const OSSL_CC_METHOD            *cc_method;
@@ -55,7 +56,7 @@ struct helper {
     QUIC_DEMUX                      *demux;
     OSSL_QRX                        *qrx;
     OSSL_QRX_ARGS                   qrx_args;
-    OSSL_QRX_PKT                    qrx_pkt;
+    OSSL_QRX_PKT                    *qrx_pkt;
     PACKET                          pkt;
     uint64_t                        frame_type;
     union {
@@ -80,8 +81,8 @@ static void helper_cleanup(struct helper *h)
     size_t i;
     uint32_t pn_space;
 
-    if (h->qrx_pkt.handle != NULL)
-        ossl_qrx_release_pkt(h->qrx, h->qrx_pkt.handle);
+    ossl_qrx_pkt_release(h->qrx_pkt);
+    h->qrx_pkt = NULL;
 
     for (pn_space = QUIC_PN_SPACE_INITIAL;
          pn_space < QUIC_PN_SPACE_NUM;
@@ -147,13 +148,24 @@ static int helper_init(struct helper *h)
                                        NULL)))
         goto err;
 
+    if (!TEST_true(ossl_quic_rxfc_init(&h->max_streams_bidi_rxfc, NULL,
+                                       100, 100,
+                                       fake_now,
+                                       NULL)))
+        goto err;
+
+    if (!TEST_true(ossl_quic_rxfc_init(&h->max_streams_uni_rxfc, NULL,
+                                       100, 100,
+                                       fake_now,
+                                       NULL)))
+
     if (!TEST_true(ossl_statm_init(&h->statm)))
         goto err;
 
     h->have_statm = 1;
 
     h->cc_method = &ossl_cc_dummy_method;
-    if (!TEST_ptr(h->cc_data = h->cc_method->new(NULL, NULL, NULL)))
+    if (!TEST_ptr(h->cc_data = h->cc_method->new(fake_now, NULL)))
         goto err;
 
     if (!TEST_ptr(h->args.ackm = ossl_ackm_new(fake_now, NULL,
@@ -162,7 +174,10 @@ static int helper_init(struct helper *h)
                                                h->cc_data)))
         goto err;
 
-    if (!TEST_true(ossl_quic_stream_map_init(&h->qsm)))
+    if (!TEST_true(ossl_quic_stream_map_init(&h->qsm, NULL, NULL,
+                                             &h->max_streams_bidi_rxfc,
+                                             &h->max_streams_uni_rxfc,
+                                             /*is_server=*/0)))
         goto err;
 
     h->have_qsm = 1;
@@ -171,19 +186,21 @@ static int helper_init(struct helper *h)
         if (!TEST_ptr(h->args.crypto[i] = ossl_quic_sstream_new(4096)))
             goto err;
 
-    h->args.cur_scid   = scid_1;
-    h->args.cur_dcid   = dcid_1;
-    h->args.qsm        = &h->qsm;
-    h->args.conn_txfc  = &h->conn_txfc;
-    h->args.conn_rxfc  = &h->conn_rxfc;
-    h->args.cc_method  = h->cc_method;
-    h->args.cc_data    = h->cc_data;
-    h->args.now        = fake_now;
+    h->args.cur_scid                = scid_1;
+    h->args.cur_dcid                = dcid_1;
+    h->args.qsm                     = &h->qsm;
+    h->args.conn_txfc               = &h->conn_txfc;
+    h->args.conn_rxfc               = &h->conn_rxfc;
+    h->args.max_streams_bidi_rxfc   = &h->max_streams_bidi_rxfc;
+    h->args.max_streams_uni_rxfc    = &h->max_streams_uni_rxfc;
+    h->args.cc_method               = h->cc_method;
+    h->args.cc_data                 = h->cc_data;
+    h->args.now                     = fake_now;
 
     if (!TEST_ptr(h->txp = ossl_quic_tx_packetiser_new(&h->args)))
         goto err;
 
-    if (!TEST_ptr(h->demux = ossl_quic_demux_new(h->bio2, 8, 1200,
+    if (!TEST_ptr(h->demux = ossl_quic_demux_new(h->bio2, 8,
                                                  fake_now, NULL)))
         goto err;
 
@@ -227,6 +244,7 @@ err:
 #define OPK_RESET_STREAM            19  /* Mark stream for RESET_STREAM */
 #define OPK_CONN_TXFC_BUMP          20  /* Bump connection TXFC CWM */
 #define OPK_STREAM_TXFC_BUMP        21  /* Bump stream TXFC CWM */
+#define OPK_HANDSHAKE_COMPLETE      22  /* Mark handshake as complete */
 
 struct script_op {
     uint32_t opcode;
@@ -280,6 +298,8 @@ struct script_op {
     { OPK_CONN_TXFC_BUMP, (cwm) },
 #define OP_STREAM_TXFC_BUMP(id, cwm) \
     { OPK_STREAM_TXFC_BUMP, (cwm), (id) },
+#define OP_HANDSHAKE_COMPLETE() \
+    { OPK_HANDSHAKE_COMPLETE },
 
 static int schedule_handshake_done(struct helper *h)
 {
@@ -372,12 +392,11 @@ static int schedule_cfq_new_conn_id(struct helper *h)
     QUIC_CFQ_ITEM *cfq_item;
     WPACKET wpkt;
     BUF_MEM *buf_mem = NULL;
-    char have_wpkt = 0;
     size_t l = 0;
     OSSL_QUIC_FRAME_NEW_CONN_ID ncid = {0};
 
-    ncid.seq_num         = 1234;
-    ncid.retire_prior_to = 2345;
+    ncid.seq_num         = 2345;
+    ncid.retire_prior_to = 1234;
     ncid.conn_id         = cid_1;
     memcpy(ncid.stateless_reset_token, reset_token_1, sizeof(reset_token_1));
 
@@ -387,9 +406,12 @@ static int schedule_cfq_new_conn_id(struct helper *h)
     if (!TEST_true(WPACKET_init(&wpkt, buf_mem)))
         goto err;
 
-    have_wpkt = 1;
-    if (!TEST_true(ossl_quic_wire_encode_frame_new_conn_id(&wpkt, &ncid)))
+    if (!TEST_true(ossl_quic_wire_encode_frame_new_conn_id(&wpkt, &ncid))) {
+        WPACKET_cleanup(&wpkt);
         goto err;
+    }
+
+    WPACKET_finish(&wpkt);
 
     if (!TEST_true(WPACKET_get_total_written(&wpkt, &l)))
         goto err;
@@ -404,15 +426,15 @@ static int schedule_cfq_new_conn_id(struct helper *h)
 
     rc = 1;
 err:
-    if (have_wpkt)
-        WPACKET_cleanup(&wpkt);
+    if (!rc)
+        BUF_MEM_free(buf_mem);
     return rc;
 }
 
 static int check_cfq_new_conn_id(struct helper *h)
 {
-    if (!TEST_uint64_t_eq(h->frame.new_conn_id.seq_num, 1234)
-        || !TEST_uint64_t_eq(h->frame.new_conn_id.retire_prior_to, 2345)
+    if (!TEST_uint64_t_eq(h->frame.new_conn_id.seq_num, 2345)
+        || !TEST_uint64_t_eq(h->frame.new_conn_id.retire_prior_to, 1234)
         || !TEST_mem_eq(&h->frame.new_conn_id.conn_id, sizeof(cid_1),
                         &cid_1, sizeof(cid_1))
         || !TEST_mem_eq(&h->frame.new_conn_id.stateless_reset_token,
@@ -451,7 +473,6 @@ static int schedule_cfq_new_token(struct helper *h)
     QUIC_CFQ_ITEM *cfq_item;
     WPACKET wpkt;
     BUF_MEM *buf_mem = NULL;
-    char have_wpkt = 0;
     size_t l = 0;
 
     if (!TEST_ptr(buf_mem = BUF_MEM_new()))
@@ -460,10 +481,13 @@ static int schedule_cfq_new_token(struct helper *h)
     if (!TEST_true(WPACKET_init(&wpkt, buf_mem)))
         goto err;
 
-    have_wpkt = 1;
     if (!TEST_true(ossl_quic_wire_encode_frame_new_token(&wpkt, token_1,
-                                                         sizeof(token_1))))
+                                                         sizeof(token_1)))) {
+        WPACKET_cleanup(&wpkt);
         goto err;
+    }
+
+    WPACKET_finish(&wpkt);
 
     if (!TEST_true(WPACKET_get_total_written(&wpkt, &l)))
         goto err;
@@ -478,8 +502,8 @@ static int schedule_cfq_new_token(struct helper *h)
 
     rc = 1;
 err:
-    if (have_wpkt)
-        WPACKET_cleanup(&wpkt);
+    if (!rc)
+        BUF_MEM_free(buf_mem);
     return rc;
 }
 
@@ -601,6 +625,7 @@ static int check_stream_9(struct helper *h)
 
 static const struct script_op script_9[] = {
     OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_HANDSHAKE_COMPLETE()
     OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_STREAM_NEW(42)
     OP_STREAM_SEND(42, stream_9)
@@ -909,6 +934,7 @@ static int check_stream_10d(struct helper *h)
 
 static const struct script_op script_10[] = {
     OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_HANDSHAKE_COMPLETE()
     OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_STREAM_NEW(42)
     OP_STREAM_NEW(43)
@@ -982,6 +1008,7 @@ static int check_stream_12(struct helper *h)
 
 static const struct script_op script_12[] = {
     OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_HANDSHAKE_COMPLETE()
     OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_STREAM_NEW(42)
     OP_STOP_SENDING(42, 4568)
@@ -1014,6 +1041,7 @@ static ossl_unused int check_stream_13(struct helper *h)
 
 static const struct script_op script_13[] = {
     OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_HANDSHAKE_COMPLETE()
     OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_STREAM_NEW(42)
     OP_CONN_TXFC_BUMP(8)
@@ -1065,6 +1093,7 @@ static int check_14(struct helper *h)
 
 static const struct script_op script_14[] = {
     OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_HANDSHAKE_COMPLETE()
     OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_CHECK(gen_conn_close)
     OP_TXP_GENERATE(TX_PACKETISER_ARCHETYPE_NORMAL)
@@ -1075,6 +1104,93 @@ static const struct script_op script_14[] = {
     OP_CHECK(check_14)
     OP_EXPECT_NO_FRAME()
     OP_RX_PKT_NONE()
+    OP_END
+};
+
+/* 15. INITIAL, Anti-Deadlock Probe Simulation */
+static int gen_probe_initial(struct helper *h)
+{
+    OSSL_ACKM_PROBE_INFO *probe = ossl_ackm_get0_probe_request(h->args.ackm);
+
+    /*
+     * Pretend the ACKM asked for an anti-deadlock Initial probe.
+     * We test output of this in the ACKM unit tests.
+     */
+    ++probe->anti_deadlock_initial;
+    return 1;
+}
+
+static const struct script_op script_15[] = {
+    OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_INITIAL, QRL_SUITE_AES128GCM, secret_1)
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_CHECK(gen_probe_initial)
+    OP_TXP_GENERATE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_RX_PKT()
+    OP_EXPECT_DGRAM_LEN(1200, 1200)
+    OP_NEXT_FRAME()
+    OP_EXPECT_FRAME(OSSL_QUIC_FRAME_TYPE_PING)
+    OP_EXPECT_NO_FRAME()
+    OP_RX_PKT_NONE()
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_END
+};
+
+/* 16. HANDSHAKE, Anti-Deadlock Probe Simulation */
+static int gen_probe_handshake(struct helper *h)
+{
+    OSSL_ACKM_PROBE_INFO *probe = ossl_ackm_get0_probe_request(h->args.ackm);
+
+    /*
+     * Pretend the ACKM asked for an anti-deadlock Handshake probe.
+     * We test output of this in the ACKM unit tests.
+     */
+    ++probe->anti_deadlock_handshake;
+    return 1;
+}
+
+static const struct script_op script_16[] = {
+    OP_DISCARD_EL(QUIC_ENC_LEVEL_INITIAL)
+    OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_HANDSHAKE, QRL_SUITE_AES128GCM, secret_1)
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_CHECK(gen_probe_handshake)
+    OP_TXP_GENERATE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_RX_PKT()
+    OP_EXPECT_DGRAM_LEN(21, 512)
+    OP_NEXT_FRAME()
+    OP_EXPECT_FRAME(OSSL_QUIC_FRAME_TYPE_PING)
+    OP_EXPECT_NO_FRAME()
+    OP_RX_PKT_NONE()
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_END
+};
+
+/* 17. 1-RTT, Probe Simulation */
+static int gen_probe_1rtt(struct helper *h)
+{
+    OSSL_ACKM_PROBE_INFO *probe = ossl_ackm_get0_probe_request(h->args.ackm);
+
+    /*
+     * Pretend the ACKM asked for a 1-RTT PTO probe.
+     * We test output of this in the ACKM unit tests.
+     */
+    ++probe->pto[QUIC_PN_SPACE_APP];
+    return 1;
+}
+
+static const struct script_op script_17[] = {
+    OP_DISCARD_EL(QUIC_ENC_LEVEL_INITIAL)
+    OP_DISCARD_EL(QUIC_ENC_LEVEL_HANDSHAKE)
+    OP_PROVIDE_SECRET(QUIC_ENC_LEVEL_1RTT, QRL_SUITE_AES128GCM, secret_1)
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_CHECK(gen_probe_1rtt)
+    OP_TXP_GENERATE(TX_PACKETISER_ARCHETYPE_NORMAL)
+    OP_RX_PKT()
+    OP_EXPECT_DGRAM_LEN(21, 512)
+    OP_NEXT_FRAME()
+    OP_EXPECT_FRAME(OSSL_QUIC_FRAME_TYPE_PING)
+    OP_EXPECT_NO_FRAME()
+    OP_RX_PKT_NONE()
+    OP_TXP_GENERATE_NONE(TX_PACKETISER_ARCHETYPE_NORMAL)
     OP_END
 };
 
@@ -1092,7 +1208,10 @@ static const struct script_op *const scripts[] = {
     script_11,
     script_12,
     script_13,
-    script_14
+    script_14,
+    script_15,
+    script_16,
+    script_17
 };
 
 static void skip_padding(struct helper *h)
@@ -1108,7 +1227,7 @@ static void skip_padding(struct helper *h)
 
 static int run_script(const struct script_op *script)
 {
-    int testresult = 0, have_helper = 0;
+    int testresult = 0, have_helper = 0, sent_ack_eliciting = 0;
     struct helper h;
     const struct script_op *op;
 
@@ -1119,7 +1238,8 @@ static int run_script(const struct script_op *script)
     for (op = script; op->opcode != OPK_END; ++op) {
         switch (op->opcode) {
         case OPK_TXP_GENERATE:
-            if (!TEST_int_eq(ossl_quic_tx_packetiser_generate(h.txp, (int)op->arg0),
+            if (!TEST_int_eq(ossl_quic_tx_packetiser_generate(h.txp, (int)op->arg0,
+                                                              &sent_ack_eliciting),
                              TX_PACKETISER_RES_SENT_PKT))
                 goto err;
 
@@ -1127,20 +1247,21 @@ static int run_script(const struct script_op *script)
             ossl_qtx_flush_net(h.args.qtx);
             break;
         case OPK_TXP_GENERATE_NONE:
-            if (!TEST_int_eq(ossl_quic_tx_packetiser_generate(h.txp, (int)op->arg0),
+            if (!TEST_int_eq(ossl_quic_tx_packetiser_generate(h.txp, (int)op->arg0,
+                                                              &sent_ack_eliciting),
                              TX_PACKETISER_RES_NO_PKT))
                 goto err;
 
             break;
         case OPK_RX_PKT:
             ossl_quic_demux_pump(h.demux);
-            if (h.qrx_pkt.handle != NULL)
-                ossl_qrx_release_pkt(h.qrx, h.qrx_pkt.handle);
+            ossl_qrx_pkt_release(h.qrx_pkt);
+            h.qrx_pkt = NULL;
             if (!TEST_true(ossl_qrx_read_pkt(h.qrx, &h.qrx_pkt)))
                 goto err;
             if (!TEST_true(PACKET_buf_init(&h.pkt,
-                                           h.qrx_pkt.hdr->data,
-                                           h.qrx_pkt.hdr->len)))
+                                           h.qrx_pkt->hdr->data,
+                                           h.qrx_pkt->hdr->len)))
                 goto err;
             h.frame_type = UINT64_MAX;
             break;
@@ -1151,8 +1272,8 @@ static int run_script(const struct script_op *script)
             h.frame_type = UINT64_MAX;
             break;
         case OPK_EXPECT_DGRAM_LEN:
-            if (!TEST_size_t_ge(h.qrx_pkt.datagram_len, (size_t)op->arg0)
-                || !TEST_size_t_le(h.qrx_pkt.datagram_len, (size_t)op->arg1))
+            if (!TEST_size_t_ge(h.qrx_pkt->datagram_len, (size_t)op->arg0)
+                || !TEST_size_t_le(h.qrx_pkt->datagram_len, (size_t)op->arg1))
                 goto err;
             break;
         case OPK_EXPECT_FRAME:
@@ -1160,12 +1281,12 @@ static int run_script(const struct script_op *script)
                 goto err;
             break;
         case OPK_EXPECT_INITIAL_TOKEN:
-            if (!TEST_mem_eq(h.qrx_pkt.hdr->token, h.qrx_pkt.hdr->token_len,
+            if (!TEST_mem_eq(h.qrx_pkt->hdr->token, h.qrx_pkt->hdr->token_len,
                              op->buf, (size_t)op->arg0))
                 goto err;
             break;
         case OPK_EXPECT_HDR:
-            if (!TEST_true(cmp_pkt_hdr(h.qrx_pkt.hdr, op->buf,
+            if (!TEST_true(cmp_pkt_hdr(h.qrx_pkt->hdr, op->buf,
                                        NULL, 0, 0)))
                 goto err;
             break;
@@ -1216,7 +1337,7 @@ static int run_script(const struct script_op *script)
                     goto err;
                 break;
             case OSSL_QUIC_FRAME_TYPE_CRYPTO:
-                if (!TEST_true(ossl_quic_wire_decode_frame_crypto(&h.pkt, &h.frame.crypto)))
+                if (!TEST_true(ossl_quic_wire_decode_frame_crypto(&h.pkt, 0, &h.frame.crypto)))
                     goto err;
                 break;
 
@@ -1228,7 +1349,7 @@ static int run_script(const struct script_op *script)
             case OSSL_QUIC_FRAME_TYPE_STREAM_OFF_FIN:
             case OSSL_QUIC_FRAME_TYPE_STREAM_OFF_LEN:
             case OSSL_QUIC_FRAME_TYPE_STREAM_OFF_LEN_FIN:
-                if (!TEST_true(ossl_quic_wire_decode_frame_stream(&h.pkt, &h.frame.stream)))
+                if (!TEST_true(ossl_quic_wire_decode_frame_stream(&h.pkt, 0, &h.frame.stream)))
                     goto err;
                 break;
 
@@ -1354,7 +1475,8 @@ static int run_script(const struct script_op *script)
                                                                  op->arg0)))
                     goto err;
 
-                if (!TEST_true(ossl_quic_stream_stop_sending(s, op->arg1)))
+                if (!TEST_true(ossl_quic_stream_map_stop_sending_recv_part(h.args.qsm,
+                                                                           s, op->arg1)))
                     goto err;
 
                 ossl_quic_stream_map_update_state(h.args.qsm, s);
@@ -1371,7 +1493,8 @@ static int run_script(const struct script_op *script)
                                                                  op->arg0)))
                     goto err;
 
-                if (!TEST_true(ossl_quic_stream_reset(s, op->arg1)))
+                if (!TEST_true(ossl_quic_stream_map_reset_stream_send_part(h.args.qsm,
+                                                                           s, op->arg1)))
                     goto err;
 
                 ossl_quic_stream_map_update_state(h.args.qsm, s);
@@ -1398,6 +1521,9 @@ static int run_script(const struct script_op *script)
 
                 ossl_quic_stream_map_update_state(h.args.qsm, s);
             }
+            break;
+        case OPK_HANDSHAKE_COMPLETE:
+            ossl_quic_tx_packetiser_notify_handshake_complete(h.txp);
             break;
         default:
             TEST_error("bad opcode");

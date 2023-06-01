@@ -189,6 +189,13 @@ const RAND_METHOD *RAND_get_rand_method(void)
     if (!RUN_ONCE(&rand_init, do_rand_init))
         return NULL;
 
+    if (!CRYPTO_THREAD_read_lock(rand_meth_lock))
+        return NULL;
+    tmp_meth = default_RAND_meth;
+    CRYPTO_THREAD_unlock(rand_meth_lock);
+    if (tmp_meth != NULL)
+        return tmp_meth;
+
     if (!CRYPTO_THREAD_write_lock(rand_meth_lock))
         return NULL;
     if (default_RAND_meth == NULL) {
@@ -273,7 +280,13 @@ void RAND_add(const void *buf, int num, double randomness)
 # endif
     drbg = RAND_get0_primary(NULL);
     if (drbg != NULL && num > 0)
+# ifdef OPENSSL_RAND_SEED_NONE
+        /* Without an entropy source, we have to rely on the user */
+        EVP_RAND_reseed(drbg, 0, buf, num, NULL, 0);
+# else
+        /* With an entropy source, we downgrade this to additional input */
         EVP_RAND_reseed(drbg, 0, NULL, 0, buf, num);
+# endif
 }
 
 # if !defined(OPENSSL_NO_DEPRECATED_1_1_0)

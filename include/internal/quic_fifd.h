@@ -17,6 +17,8 @@
 # include "internal/quic_txpim.h"
 # include "internal/quic_stream.h"
 
+# ifndef OPENSSL_NO_QUIC
+
 /*
  * QUIC Frame-in-Flight Dispatcher (FIFD)
  * ======================================
@@ -35,6 +37,14 @@ struct quic_fifd_st {
                                  QUIC_TXPIM_PKT *pkt,
                                  void *arg);
     void           *regen_frame_arg;
+    void          (*confirm_frame)(uint64_t frame_type,
+                                   uint64_t stream_id,
+                                   QUIC_TXPIM_PKT *pkt,
+                                   void *arg);
+    void           *confirm_frame_arg;
+    void          (*sstream_updated)(uint64_t stream_id,
+                                   void *arg);
+    void           *sstream_updated_arg;
 };
 
 int ossl_quic_fifd_init(QUIC_FIFD *fifd,
@@ -51,10 +61,20 @@ int ossl_quic_fifd_init(QUIC_FIFD *fifd,
                                             uint64_t stream_id,
                                             QUIC_TXPIM_PKT *pkt,
                                             void *arg),
-                        void *regen_frame_arg);
+                        void *regen_frame_arg,
+                        void (*confirm_frame)(uint64_t frame_type,
+                                             uint64_t stream_id,
+                                             QUIC_TXPIM_PKT *pkt,
+                                             void *arg),
+                        void *confirm_frame_arg,
+                        void (*sstream_updated)(uint64_t stream_id,
+                                                void *arg),
+                        void *sstream_updated_arg);
 
 void ossl_quic_fifd_cleanup(QUIC_FIFD *fifd); /* (no-op) */
 
 int ossl_quic_fifd_pkt_commit(QUIC_FIFD *fifd, QUIC_TXPIM_PKT *pkt);
+
+# endif
 
 #endif

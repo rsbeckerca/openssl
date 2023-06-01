@@ -13,6 +13,8 @@
 # include <openssl/ssl.h>
 # include "internal/time.h"
 
+# ifndef OPENSSL_NO_QUIC
+
 /*
  * TX Flow Controller (TXFC)
  * =========================
@@ -135,7 +137,7 @@ struct quic_rxfc_st {
     OSSL_TIME       (*now)(void *arg);
     void            *now_arg;
     QUIC_RXFC       *parent;
-    unsigned char   error_code, has_cwm_changed, is_fin;
+    unsigned char   error_code, has_cwm_changed, is_fin, stream_count_mode;
 };
 
 /*
@@ -151,6 +153,14 @@ int ossl_quic_rxfc_init(QUIC_RXFC *rxfc, QUIC_RXFC *conn_rxfc,
                         uint64_t max_window_size,
                         OSSL_TIME (*now)(void *arg),
                         void *now_arg);
+
+/*
+ * Initialises an RX flow controller for stream count enforcement.
+ */
+int ossl_quic_rxfc_init_for_stream_count(QUIC_RXFC *rxfc,
+                                         uint64_t initial_window_size,
+                                         OSSL_TIME (*now)(void *arg),
+                                         void *now_arg);
 
 /*
  * Gets the parent (i.e., connection-level) RXFC. Returns NULL if called on a
@@ -250,5 +260,7 @@ int ossl_quic_rxfc_has_cwm_changed(QUIC_RXFC *rxfc, int clear);
  *   The peer attempted to change the stream length after ending the stream.
  */
 int ossl_quic_rxfc_get_error(QUIC_RXFC *rxfc, int clear);
+
+# endif
 
 #endif

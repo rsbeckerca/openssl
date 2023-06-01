@@ -158,10 +158,16 @@ int key_to_params(const EC_KEY *eckey, OSSL_PARAM_BLD *tmpl,
                 goto err;
         }
         if (px != NULL || py != NULL) {
-            if (px != NULL)
+            if (px != NULL) {
                 x = BN_CTX_get(bnctx);
-            if (py != NULL)
+                if (x == NULL)
+                    goto err;
+            }
+            if (py != NULL) {
                 y = BN_CTX_get(bnctx);
+                if (y == NULL)
+                    goto err;
+            }
 
             if (!EC_POINT_get_affine_coordinates(ecg, pub_point, x, y, bnctx))
                 goto err;
@@ -739,7 +745,7 @@ int common_get_params(void *key, OSSL_PARAM params[], int sm2)
         }
         p->return_size = EC_POINT_point2oct(ecg, ecp,
                                             POINT_CONVERSION_UNCOMPRESSED,
-                                            p->data, p->return_size, bnctx);
+                                            p->data, p->data_size, bnctx);
         if (p->return_size == 0)
             goto err;
     }
@@ -1000,10 +1006,10 @@ static void *ec_gen_init(void *provctx, int selection,
         gctx->libctx = libctx;
         gctx->selection = selection;
         gctx->ecdh_mode = 0;
-    }
-    if (!ec_gen_set_params(gctx, params)) {
-        OPENSSL_free(gctx);
-        gctx = NULL;
+        if (!ec_gen_set_params(gctx, params)) {
+            OPENSSL_free(gctx);
+            gctx = NULL;
+        }
     }
     return gctx;
 }
@@ -1438,7 +1444,7 @@ const OSSL_DISPATCH ossl_ec_keymgmt_functions[] = {
     { OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME,
       (void (*)(void))ec_query_operation_name },
     { OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))ec_dup },
-    { 0, NULL }
+    OSSL_DISPATCH_END
 };
 
 #ifndef FIPS_MODULE
@@ -1469,7 +1475,7 @@ const OSSL_DISPATCH ossl_sm2_keymgmt_functions[] = {
     { OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME,
       (void (*)(void))sm2_query_operation_name },
     { OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))ec_dup },
-    { 0, NULL }
+    OSSL_DISPATCH_END
 };
 # endif
 #endif

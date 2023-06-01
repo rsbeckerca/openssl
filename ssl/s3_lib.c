@@ -3366,6 +3366,7 @@ void ssl3_free(SSL *s)
     OPENSSL_clear_free(sc->s3.tmp.pms, sc->s3.tmp.pmslen);
     OPENSSL_free(sc->s3.tmp.peer_sigalgs);
     OPENSSL_free(sc->s3.tmp.peer_cert_sigalgs);
+    OPENSSL_free(sc->s3.tmp.valid_flags);
     ssl3_free_digest_list(sc);
     OPENSSL_free(sc->s3.alpn_selected);
     OPENSSL_free(sc->s3.alpn_proposed);
@@ -3390,6 +3391,7 @@ int ssl3_clear(SSL *s)
     OPENSSL_clear_free(sc->s3.tmp.pms, sc->s3.tmp.pmslen);
     OPENSSL_free(sc->s3.tmp.peer_sigalgs);
     OPENSSL_free(sc->s3.tmp.peer_cert_sigalgs);
+    OPENSSL_free(sc->s3.tmp.valid_flags);
 
     EVP_PKEY_free(sc->s3.tmp.pkey);
     EVP_PKEY_free(sc->s3.peer_tmp);
@@ -3759,6 +3761,10 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
             return (int)sc->ext.peer_supportedgroups_len;
         }
 
+    case SSL_CTRL_SET_MSG_CALLBACK_ARG:
+        sc->msg_callback_arg = parg;
+        return 1;
+
     default:
         break;
     }
@@ -3790,6 +3796,10 @@ long ssl3_callback_ctrl(SSL *s, int cmd, void (*fp) (void))
         sc->not_resumable_session_cb = (int (*)(SSL *, int))fp;
         ret = 1;
         break;
+
+    case SSL_CTRL_SET_MSG_CALLBACK:
+        sc->msg_callback = (ossl_msg_cb)fp;
+        return 1;
     default:
         break;
     }
@@ -4244,7 +4254,7 @@ const SSL_CIPHER *ssl3_choose_cipher(SSL_CONNECTION *s, STACK_OF(SSL_CIPHER) *cl
 
     if (SSL_CONNECTION_IS_TLS13(s)) {
 #ifndef OPENSSL_NO_PSK
-        int j;
+        size_t j;
 
         /*
          * If we allow "old" style PSK callbacks, and we have no certificate (so
@@ -4254,8 +4264,8 @@ const SSL_CIPHER *ssl3_choose_cipher(SSL_CONNECTION *s, STACK_OF(SSL_CIPHER) *cl
          * that.
          */
         if (s->psk_server_callback != NULL) {
-            for (j = 0; j < SSL_PKEY_NUM && !ssl_has_cert(s, j); j++);
-            if (j == SSL_PKEY_NUM) {
+            for (j = 0; j < s->ssl_pkey_num && !ssl_has_cert(s, j); j++);
+            if (j == s->ssl_pkey_num) {
                 /* There are no certificates */
                 prefer_sha256 = 1;
             }

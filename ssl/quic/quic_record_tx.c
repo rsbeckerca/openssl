@@ -90,6 +90,15 @@ struct ossl_qtx_st {
      * confidentiality limit.
      */
     uint64_t                    epoch_pkt_count;
+
+    ossl_mutate_packet_cb mutatecb;
+    ossl_finish_mutate_cb finishmutatecb;
+    void *mutatearg;
+
+    /* Message callback related arguments */
+    ossl_msg_cb msg_callback;
+    void *msg_callback_arg;
+    SSL *msg_callback_ssl;
 };
 
 /* Instantiates a new QTX. */
@@ -103,11 +112,6 @@ OSSL_QTX *ossl_qtx_new(const OSSL_QTX_ARGS *args)
     qtx = OPENSSL_zalloc(sizeof(OSSL_QTX));
     if (qtx == NULL)
         return 0;
-
-    if (args->bio != NULL && !BIO_up_ref(args->bio)) {
-        OPENSSL_free(qtx);
-        return 0;
-    }
 
     qtx->libctx             = args->libctx;
     qtx->propq              = args->propq;
@@ -143,8 +147,16 @@ void ossl_qtx_free(OSSL_QTX *qtx)
     for (i = 0; i < QUIC_ENC_LEVEL_NUM; ++i)
         ossl_qrl_enc_level_set_discard(&qtx->el_set, i);
 
-    BIO_free(qtx->bio);
     OPENSSL_free(qtx);
+}
+
+/* Set mutator callbacks for test framework support */
+void ossl_qtx_set_mutator(OSSL_QTX *qtx, ossl_mutate_packet_cb mutatecb,
+                          ossl_finish_mutate_cb finishmutatecb, void *mutatearg)
+{
+    qtx->mutatecb       = mutatecb;
+    qtx->finishmutatecb = finishmutatecb;
+    qtx->mutatearg      = mutatearg;
 }
 
 int ossl_qtx_provide_secret(OSSL_QTX              *qtx,
@@ -420,25 +432,30 @@ int ossl_qtx_calculate_plaintext_payload_len(OSSL_QTX *qtx, uint32_t enc_level,
  */
 #define QTX_FAIL_INSUFFICIENT_LEN   (-2)
 
-static int qtx_write_hdr(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
+static int qtx_write_hdr(OSSL_QTX *qtx, const QUIC_PKT_HDR *hdr, TXE *txe,
                          QUIC_PKT_HDR_PTRS *ptrs)
 {
     WPACKET wpkt;
     size_t l = 0;
+    unsigned char *data = txe_data(txe) + txe->data_len;
 
-    if (!WPACKET_init_static_len(&wpkt, txe_data(txe) + txe->data_len,
-                                 txe->alloc_len - txe->data_len, 0))
+    if (!WPACKET_init_static_len(&wpkt, data, txe->alloc_len - txe->data_len, 0))
         return 0;
 
-    if (!ossl_quic_wire_encode_pkt_hdr(&wpkt, pkt->hdr->dst_conn_id.id_len,
-                                       pkt->hdr, ptrs)
+    if (!ossl_quic_wire_encode_pkt_hdr(&wpkt, hdr->dst_conn_id.id_len,
+                                       hdr, ptrs)
         || !WPACKET_get_total_written(&wpkt, &l)) {
         WPACKET_finish(&wpkt);
         return 0;
     }
+    WPACKET_finish(&wpkt);
+
+    if (qtx->msg_callback != NULL)
+        qtx->msg_callback(1, OSSL_QUIC1_VERSION, SSL3_RT_QUIC_PACKET, data, l,
+                          qtx->msg_callback_ssl, qtx->msg_callback_arg);
 
     txe->data_len += l;
-    WPACKET_finish(&wpkt);
+
     return 1;
 }
 
@@ -540,6 +557,9 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
     QUIC_PKT_HDR_PTRS ptrs;
     unsigned char *hdr_start;
     OSSL_QRL_ENC_LEVEL *el = NULL;
+    QUIC_PKT_HDR *hdr;
+    const OSSL_QTX_IOVEC *iovec;
+    size_t num_iovec;
 
     /*
      * Determine if the packet needs encryption and the minimum conceivable
@@ -564,8 +584,25 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
         goto err;
     }
 
+    /* Set some fields in the header we are responsible for. */
+    if (pkt->hdr->type == QUIC_PKT_TYPE_1RTT)
+        pkt->hdr->key_phase = (unsigned char)(el->key_epoch & 1);
+
+    /* If we are running tests then mutate_packet may be non NULL */
+    if (qtx->mutatecb != NULL) {
+        if (!qtx->mutatecb(pkt->hdr, pkt->iovec, pkt->num_iovec, &hdr,
+                           &iovec, &num_iovec, qtx->mutatearg)) {
+            ret = QTX_FAIL_GENERIC;
+            goto err;
+        }
+    } else {
+        hdr = pkt->hdr;
+        iovec = pkt->iovec;
+        num_iovec = pkt->num_iovec;
+    }
+
     /* Walk the iovecs to determine actual input payload length. */
-    iovec_cur_init(&cur, pkt->iovec, pkt->num_iovec);
+    iovec_cur_init(&cur, iovec, num_iovec);
 
     if (cur.bytes_remaining == 0) {
         /* No zero-length payloads allowed. */
@@ -579,10 +616,10 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
                                 : cur.bytes_remaining;
 
     /* Determine header length. */
-    pkt->hdr->data  = NULL;
-    pkt->hdr->len   = payload_len;
-    pred_hdr_len = ossl_quic_wire_get_encoded_pkt_hdr_len(pkt->hdr->dst_conn_id.id_len,
-                                                          pkt->hdr);
+    hdr->data  = NULL;
+    hdr->len   = payload_len;
+    pred_hdr_len = ossl_quic_wire_get_encoded_pkt_hdr_len(hdr->dst_conn_id.id_len,
+                                                          hdr);
     if (pred_hdr_len == 0) {
         ret = QTX_FAIL_GENERIC;
         goto err;
@@ -596,14 +633,10 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
         goto err;
     }
 
-    /* Set some fields in the header we are responsible for. */
-    if (pkt->hdr->type == QUIC_PKT_TYPE_1RTT)
-        pkt->hdr->key_phase = (unsigned char)(el->key_epoch & 1);
-
-    if (ossl_quic_pkt_type_has_pn(pkt->hdr->type)) {
+    if (ossl_quic_pkt_type_has_pn(hdr->type)) {
         if (!ossl_quic_wire_encode_pkt_hdr_pn(pkt->pn,
-                                              pkt->hdr->pn,
-                                              pkt->hdr->pn_len)) {
+                                              hdr->pn,
+                                              hdr->pn_len)) {
             ret = QTX_FAIL_GENERIC;
             goto err;
         }
@@ -611,7 +644,7 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
 
     /* Append the header to the TXE. */
     hdr_start = txe_data(txe) + txe->data_len;
-    if (!qtx_write_hdr(qtx, pkt, txe, &ptrs)) {
+    if (!qtx_write_hdr(qtx, hdr, txe, &ptrs)) {
         ret = QTX_FAIL_GENERIC;
         goto err;
     }
@@ -644,6 +677,8 @@ static int qtx_write(OSSL_QTX *qtx, const OSSL_QTX_PKT *pkt, TXE *txe,
         assert(txe->data_len - orig_data_len == pkt_len);
     }
 
+    if (qtx->finishmutatecb != NULL)
+        qtx->finishmutatecb(qtx->mutatearg);
     return 1;
 
 err:
@@ -652,6 +687,8 @@ err:
      * TXE.
      */
     txe->data_len = orig_data_len;
+    if (qtx->finishmutatecb != NULL)
+        qtx->finishmutatecb(qtx->mutatearg);
     return ret;
 }
 
@@ -818,14 +855,18 @@ static void txe_to_msg(TXE *txe, BIO_MSG *msg)
 
 #define MAX_MSGS_PER_SEND   32
 
-void ossl_qtx_flush_net(OSSL_QTX *qtx)
+int ossl_qtx_flush_net(OSSL_QTX *qtx)
 {
     BIO_MSG msg[MAX_MSGS_PER_SEND];
-    size_t wr, i;
+    size_t wr, i, total_written = 0;
     TXE *txe;
+    int res;
+
+    if (ossl_list_txe_head(&qtx->pending) == NULL)
+        return QTX_FLUSH_NET_RES_OK; /* Nothing to send. */
 
     if (qtx->bio == NULL)
-        return;
+        return QTX_FLUSH_NET_RES_PERMANENT_FAIL;
 
     for (;;) {
         for (txe = ossl_list_txe_head(&qtx->pending), i = 0;
@@ -835,21 +876,52 @@ void ossl_qtx_flush_net(OSSL_QTX *qtx)
 
         if (!i)
             /* Nothing to send. */
-            return;
+            break;
 
-        if (!BIO_sendmmsg(qtx->bio, msg, sizeof(BIO_MSG), i, 0, &wr) || wr == 0)
+        ERR_set_mark();
+        res = BIO_sendmmsg(qtx->bio, msg, sizeof(BIO_MSG), i, 0, &wr);
+        if (res && wr == 0) {
+            /*
+             * Treat 0 messages sent as a transient error and just stop for now.
+             */
+            ERR_clear_last_mark();
+            break;
+        } else if (!res) {
             /*
              * We did not get anything, so further calls will probably not
              * succeed either.
              */
-            break;
+            if (BIO_err_is_non_fatal(ERR_peek_last_error())) {
+                /* Transient error, just stop for now, clearing the error. */
+                ERR_pop_to_mark();
+                break;
+            } else {
+                /* Non-transient error, fail and do not clear the error. */
+                ERR_clear_last_mark();
+                return QTX_FLUSH_NET_RES_PERMANENT_FAIL;
+            }
+        }
+
+        ERR_clear_last_mark();
 
         /*
          * Remove everything which was successfully sent from the pending queue.
          */
-        for (i = 0; i < wr; ++i)
+        for (i = 0; i < wr; ++i) {
+            if (qtx->msg_callback != NULL)
+                qtx->msg_callback(1, OSSL_QUIC1_VERSION, SSL3_RT_QUIC_DATAGRAM,
+                                msg[i].data, msg[i].data_len,
+                                qtx->msg_callback_ssl,
+                                qtx->msg_callback_arg);
             qtx_pending_to_free(qtx);
+        }
+
+        total_written += wr;
     }
+
+    return total_written > 0
+        ? QTX_FLUSH_NET_RES_OK
+        : QTX_FLUSH_NET_RES_TRANSIENT_FAIL;
 }
 
 int ossl_qtx_pop_net(OSSL_QTX *qtx, BIO_MSG *msg)
@@ -864,14 +936,9 @@ int ossl_qtx_pop_net(OSSL_QTX *qtx, BIO_MSG *msg)
     return 1;
 }
 
-int ossl_qtx_set1_bio(OSSL_QTX *qtx, BIO *bio)
+void ossl_qtx_set_bio(OSSL_QTX *qtx, BIO *bio)
 {
-    if (bio != NULL && !BIO_up_ref(bio))
-        return 0;
-
-    BIO_free(qtx->bio);
     qtx->bio = bio;
-    return 1;
 }
 
 int ossl_qtx_set_mdpl(OSSL_QTX *qtx, size_t mdpl)
@@ -934,4 +1001,16 @@ uint64_t ossl_qtx_get_max_epoch_pkt_count(OSSL_QTX *qtx, uint32_t enc_level)
         return UINT64_MAX;
 
     return ossl_qrl_get_suite_max_pkt(el->suite_id);
+}
+
+void ossl_qtx_set_msg_callback(OSSL_QTX *qtx, ossl_msg_cb msg_callback,
+                               SSL *msg_callback_ssl)
+{
+    qtx->msg_callback = msg_callback;
+    qtx->msg_callback_ssl = msg_callback_ssl;
+}
+
+void ossl_qtx_set_msg_callback_arg(OSSL_QTX *qtx, void *msg_callback_arg)
+{
+    qtx->msg_callback_arg = msg_callback_arg;
 }

@@ -424,8 +424,8 @@ int OSSL_CMP_CTX_set1_referenceValue(OSSL_CMP_CTX *ctx,
 }
 
 /* Set or clear the password to be used for protecting messages with PBMAC */
-int OSSL_CMP_CTX_set1_secretValue(OSSL_CMP_CTX *ctx, const unsigned char *sec,
-                                  int len)
+int OSSL_CMP_CTX_set1_secretValue(OSSL_CMP_CTX *ctx,
+                                  const unsigned char *sec, int len)
 {
     ASN1_OCTET_STRING *secretValue = NULL;
 
@@ -602,13 +602,13 @@ DEFINE_OSSL_set1_up_ref(ossl_cmp_ctx, validatedSrvCert, X509)
  */
 DEFINE_OSSL_set1_up_ref(OSSL_CMP_CTX, srvCert, X509)
 
-/* Set the X509 name of the recipient. Set in the PKIHeader */
+/* Set the X509 name of the recipient to be placed in the PKIHeader */
 DEFINE_OSSL_CMP_CTX_set1(recipient, X509_NAME)
 
 /* Store the X509 name of the expected sender in the PKIHeader of responses */
 DEFINE_OSSL_CMP_CTX_set1(expected_sender, X509_NAME)
 
-/* Set the X509 name of the issuer. Set in the PKIHeader */
+/* Set the X509 name of the issuer to be placed in the certTemplate */
 DEFINE_OSSL_CMP_CTX_set1(issuer, X509_NAME)
 
 /*
@@ -755,6 +755,7 @@ int OSSL_CMP_CTX_set0_newPkey(OSSL_CMP_CTX *ctx, int priv, EVP_PKEY *pkey)
 }
 
 /* Get the private/public key to use for cert enrollment, or NULL on error */
+/* In case |priv| == 0, better use ossl_cmp_ctx_get0_newPubkey() below */
 EVP_PKEY *OSSL_CMP_CTX_get0_newPkey(const OSSL_CMP_CTX *ctx, int priv)
 {
     if (ctx == NULL) {
@@ -767,6 +768,21 @@ EVP_PKEY *OSSL_CMP_CTX_get0_newPkey(const OSSL_CMP_CTX *ctx, int priv)
     if (ctx->p10CSR != NULL)
         return priv ? NULL : X509_REQ_get0_pubkey(ctx->p10CSR);
     return ctx->pkey; /* may be NULL */
+}
+
+EVP_PKEY *ossl_cmp_ctx_get0_newPubkey(const OSSL_CMP_CTX *ctx)
+{
+    if (!ossl_assert(ctx != NULL))
+        return NULL;
+    if (ctx->newPkey != NULL)
+        return ctx->newPkey;
+    if (ctx->p10CSR != NULL)
+        return X509_REQ_get0_pubkey(ctx->p10CSR);
+    if (ctx->oldCert != NULL)
+        return X509_get0_pubkey(ctx->oldCert);
+    if (ctx->cert != NULL)
+        return X509_get0_pubkey(ctx->cert);
+    return ctx->pkey;
 }
 
 #define DEFINE_set1_ASN1_OCTET_STRING(PREFIX, FIELD) \
