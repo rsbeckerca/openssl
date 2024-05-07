@@ -9,7 +9,7 @@
 
 /* We need to use some deprecated APIs */
 #define OPENSSL_SUPPRESS_DEPRECATED
-
+#include <cextdecs.h(PROCESS_DEBUG_)>
 #include <string.h>
 #include "internal/nelem.h"
 #include <openssl/crypto.h>
@@ -342,6 +342,8 @@ static int test_drbg_reseed_in_child(EVP_RAND_CTX *primary,
     int fd[2];
     pid_t pid;
     unsigned char random[2 * RANDOM_SIZE];
+
+    PROCESS_DEBUG_();
 
     if (!TEST_int_ge(pipe(fd), 0))
         return 0;
