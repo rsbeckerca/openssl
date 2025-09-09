@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 1998-2022 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 1998-2025 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -82,7 +82,7 @@ my $guess_patterns = [
     [ 'HP-UX:.*',
       sub {
           my $HPUXVER = $RELEASE;
-          $HPUXVER = s/[^.]*.[0B]*//;
+          $HPUXVER =~ s/[^.]*.[0B]*//;
           # HPUX 10 and 11 targets are unified
           return "${MACHINE}-hp-hpux1x" if $HPUXVER =~ m@1[0-9]@;
           return "${MACHINE}-hp-hpux";
@@ -92,7 +92,8 @@ my $guess_patterns = [
     [ 'IRIX64:.*',                  'mips4-sgi-irix64' ],
     [ 'Linux:[2-9]\..*',            '${MACHINE}-whatever-linux2' ],
     [ 'Linux:1\..*',                '${MACHINE}-whatever-linux1' ],
-    [ 'GNU.*',                      'hurd-x86' ],
+    [ 'GNU:.*86-AT386',             'hurd-x86' ],
+    [ 'GNU:.*86_64-AT386',          'hurd-x86_64' ],
     [ 'LynxOS:.*',                  '${MACHINE}-lynx-lynxos' ],
     # BSD/OS always says 386
     [ 'BSD\/OS:4\..*',              'i486-whatever-bsdi4' ],
@@ -145,6 +146,7 @@ my $guess_patterns = [
     ],
     [ 'Paragon.*?:.*',              'i860-intel-osf1' ],
     [ 'Rhapsody:.*',                'ppc-apple-rhapsody' ],
+    [ 'Darwin:8.*?:.*?:Power.*',    'ppc-apple-darwin8' ],
     [ 'Darwin:.*?:.*?:Power.*',     'ppc-apple-darwin' ],
     [ 'Darwin:.*',                  '${MACHINE}-apple-darwin' ],
     [ 'SunOS:5\..*',                '${MACHINE}-whatever-solaris2' ],
@@ -321,6 +323,7 @@ sub determine_compiler_settings {
 
             # If we got a version number, process it
             if ($v) {
+                $v =~ s/[^.]*.0*// if $SYSTEM eq 'HP-UX';
                 $CCVENDOR = $k;
 
                 # The returned version is expected to be one of
@@ -358,8 +361,15 @@ sub determine_compiler_settings {
                 # However, other letters have been seen as well (for example X),
                 # and it's documented that HP (now VSI) reserve the letter W, X,
                 # Y and Z for their own uses.
-                my ($vendor, $version) =
-                    ( $v =~ m/^([A-Z]+) C [VWXYZ]([0-9\.-]+)(:? +\(.*?\))? on / );
+                my ($vendor, $arch, $version, $extra) =
+                    ( $v =~ m/^
+                              ([A-Z]+)                  # Usually VSI
+                              \s+ C
+                              (?:\s+(.*?))?             # Possible build arch
+                              \s+ [VWXYZ]([0-9\.-]+)    # Version
+                              (?:\s+\((.*?)\))?         # Possible extra data
+                              \s+ on
+                             /x );
                 my ($major, $minor, $patch) =
                     ( $version =~ m/^([0-9]+)\.([0-9]+)-0*?(0|[1-9][0-9]*)$/ );
                 $CC = 'CC';
@@ -482,6 +492,22 @@ EOF
         }
       ],
       [ 'ppc-apple-rhapsody',     { target => "rhapsody-ppc" } ],
+      [ 'ppc-apple-darwin8.*', 
+        sub {
+            my $KERNEL_BITS = $ENV{KERNEL_BITS} // '';
+            my $ISA64 = `sysctl -n hw.optional.64bitops 2>/dev/null`;
+            if ( $ISA64 == 1 && $KERNEL_BITS eq '' ) {
+                print <<EOF;
+WARNING! To build 64-bit package, do this:
+         $WHERE/Configure darwin8-ppc64-cc
+EOF
+                maybe_abort();
+            }
+            return { target => "darwin8-ppc64-cc" }
+                if $ISA64 == 1 && $KERNEL_BITS eq '64';
+            return { target => "darwin8-ppc-cc" };
+        }
+      ],
       [ 'ppc-apple-darwin.*',
         sub {
             my $KERNEL_BITS = $ENV{KERNEL_BITS} // '';
@@ -675,6 +701,17 @@ EOF
                                     defines => [ 'B_ENDIAN' ] } ],
       [ 'sh.*-.*-linux2',         { target => "linux-generic32",
                                     defines => [ 'L_ENDIAN' ] } ],
+      [ 'loongarch64-.*-linux2',
+        sub {
+            my $disable = [ 'asm' ];
+            if ( okrun('echo xvadd.w \$xr0,\$xr0,\$xr0',
+                       "$CC -c -x assembler - -o /dev/null 2>/dev/null") ) {
+                $disable = [];
+            }
+            return { target => "linux64-loongarch64",
+                     disable => $disable, };
+        }
+      ],
       [ 'm68k.*-.*-linux2',       { target => "linux-generic32",
                                     defines => [ 'B_ENDIAN' ] } ],
       [ 's390-.*-linux2',         { target => "linux-generic32",
@@ -730,7 +767,7 @@ EOF
                     # $GCC_ARCH denotes default ABI chosen by compiler driver
                     # (first one found on the $PATH). I assume that user
                     # expects certain consistency with the rest of his builds
-                    # and therefore switch over to 64-bit. <appro>
+                    # and therefore switch over to 64-bit. <@dot-asm>
                     print <<EOF;
 WARNING! To build 32-bit package, do this:
          $WHERE/Configure solaris-sparcv9-gcc
@@ -839,6 +876,7 @@ EOF
                                     cflags => [ '-march=armv7-a' ],
                                     cxxflags => [ '-march=armv7-a' ] } ],
       [ 'arm.*-.*-android',       { target => "android-armeabi" } ],
+      [ 'riscv64-.*-android',     { target => "android-riscv64" } ],
       [ '.*-hpux1.*',
         sub {
             my $KERNEL_BITS = $ENV{KERNEL_BITS};

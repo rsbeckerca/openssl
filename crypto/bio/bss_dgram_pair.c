@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -256,6 +256,8 @@ struct bio_dgram_pair_st {
     size_t mtu;
     /* Capability flags. */
     uint32_t cap;
+    /* The local address to use (if set) */
+    BIO_ADDR *local_addr;
     /*
      * This lock protects updates to our rbuf. Since writes are directed to our
      * own rbuf, this means we use this lock for writes and our peer's lock for
@@ -265,7 +267,7 @@ struct bio_dgram_pair_st {
     unsigned int no_trunc          : 1; /* Reads fail if they would truncate */
     unsigned int local_addr_enable : 1; /* Can use BIO_MSG->local? */
     unsigned int role              : 1; /* Determines lock order */
-    unsigned int fixed_size        : 1; /* Affects BIO_s_dgram_mem only */
+    unsigned int grows_on_write    : 1; /* Set for BIO_s_dgram_mem only */
 };
 
 #define MIN_BUF_LEN (1024)
@@ -279,8 +281,9 @@ static int dgram_pair_init(BIO *bio)
     if (b == NULL)
         return 0;
 
-    b->req_buf_len = 17*1024; /* default buffer size */
     b->mtu         = 1472;    /* conservative default MTU */
+    /* default buffer size */
+    b->req_buf_len = 9 * (sizeof(struct dgram_hdr) + b->mtu);
 
     b->lock = CRYPTO_THREAD_lock_new();
     if (b->lock == NULL) {
@@ -305,6 +308,8 @@ static int dgram_mem_init(BIO *bio)
         ERR_raise(ERR_LIB_BIO, ERR_R_BIO_LIB);
         return 0;
     }
+
+    b->grows_on_write = 1;
 
     bio->init = 1;
     return 1;
@@ -402,6 +407,8 @@ static int dgram_pair_ctrl_destroy_bio_pair(BIO *bio1)
     ring_buf_destroy(&b1->rbuf);
     bio1->init = 0;
 
+    BIO_ADDR_free(b1->local_addr);
+
     /* Early return if we don't have a peer. */
     if (b1->peer == NULL)
         return 1;
@@ -469,7 +476,7 @@ static int dgram_pair_ctrl_set_write_buf_size(BIO *bio, size_t len)
     }
 
     b->req_buf_len = len;
-    b->fixed_size = 1;
+    b->grows_on_write = 0;
     return 1;
 }
 
@@ -613,7 +620,7 @@ static int dgram_pair_ctrl_get_mtu(BIO *bio)
 {
     struct bio_dgram_pair_st *b = bio->ptr;
 
-    return b->mtu;
+    return (int)b->mtu;
 }
 
 /* BIO_dgram_set_mtu (BIO_CTRL_DGRAM_SET_MTU) */
@@ -628,6 +635,16 @@ static int dgram_pair_ctrl_set_mtu(BIO *bio, size_t mtu)
         peerb->mtu = mtu;
     }
 
+    return 1;
+}
+
+/* BIO_dgram_set0_local_addr (BIO_CTRL_DGRAM_SET0_LOCAL_ADDR) */
+static int dgram_pair_ctrl_set0_local_addr(BIO *bio, BIO_ADDR *addr)
+{
+    struct bio_dgram_pair_st *b = bio->ptr;
+
+    BIO_ADDR_free(b->local_addr);
+    b->local_addr = addr;
     return 1;
 }
 
@@ -693,7 +710,7 @@ static long dgram_mem_ctrl(BIO *bio, int cmd, long num, void *ptr)
 
     /* BIO_dgram_get_local_addr_enable */
     case BIO_CTRL_DGRAM_GET_LOCAL_ADDR_ENABLE: /* Non-threadsafe */
-        ret = (long)dgram_pair_ctrl_get_local_addr_enable(bio);
+        *(int *)ptr = (int)dgram_pair_ctrl_get_local_addr_enable(bio);
         break;
 
     /* BIO_dgram_set_local_addr_enable */
@@ -726,6 +743,10 @@ static long dgram_mem_ctrl(BIO *bio, int cmd, long num, void *ptr)
     /* BIO_dgram_set_mtu */
     case BIO_CTRL_DGRAM_SET_MTU: /* Non-threadsafe */
         ret = (long)dgram_pair_ctrl_set_mtu(bio, (uint32_t)num);
+        break;
+
+    case BIO_CTRL_DGRAM_SET0_LOCAL_ADDR:
+        ret = (long)dgram_pair_ctrl_set0_local_addr(bio, (BIO_ADDR *)ptr);
         break;
 
     /*
@@ -786,6 +807,9 @@ int BIO_new_bio_dgram_pair(BIO **pbio1, size_t writebuf1,
     long r;
     BIO *bio1 = NULL, *bio2 = NULL;
 
+    if (writebuf1 > LONG_MAX || writebuf2 > LONG_MAX)
+        goto err;
+
     bio1 = BIO_new(BIO_s_dgram_pair());
     if (bio1 == NULL)
         goto err;
@@ -795,13 +819,13 @@ int BIO_new_bio_dgram_pair(BIO **pbio1, size_t writebuf1,
         goto err;
 
     if (writebuf1 > 0) {
-        r = BIO_set_write_buf_size(bio1, writebuf1);
+        r = BIO_set_write_buf_size(bio1, (long)writebuf1);
         if (r == 0)
             goto err;
     }
 
     if (writebuf2 > 0) {
-        r = BIO_set_write_buf_size(bio2, writebuf2);
+        r = BIO_set_write_buf_size(bio2, (long)writebuf2);
         if (r == 0)
             goto err;
     }
@@ -1016,7 +1040,7 @@ static int dgram_pair_read(BIO *bio, char *buf, int sz_)
     l = dgram_pair_read_actual(bio, buf, (size_t)sz_, NULL, NULL, 0);
     if (l < 0) {
         if (l != -BIO_R_NON_FATAL)
-            ERR_raise(ERR_LIB_BIO, -l);
+            ERR_raise(ERR_LIB_BIO, (int)-l);
         ret = -1;
     } else {
         ret = (int)l;
@@ -1069,7 +1093,7 @@ static int dgram_pair_recvmmsg(BIO *bio, BIO_MSG *msg,
             if (i > 0) {
                 ret = 1;
             } else {
-                ERR_raise(ERR_LIB_BIO, -l);
+                ERR_raise(ERR_LIB_BIO, (int)-l);
                 ret = 0;
             }
             goto out;
@@ -1106,7 +1130,7 @@ static int dgram_mem_read(BIO *bio, char *buf, int sz_)
     l = dgram_pair_read_actual(bio, buf, (size_t)sz_, NULL, NULL, 0);
     if (l < 0) {
         if (l != -BIO_R_NON_FATAL)
-            ERR_raise(ERR_LIB_BIO, -l);
+            ERR_raise(ERR_LIB_BIO, (int)-l);
         ret = -1;
     } else {
         ret = (int)l;
@@ -1145,7 +1169,8 @@ static ossl_inline size_t compute_rbuf_growth(size_t target, size_t current)
 }
 
 /* Must hold local write lock */
-static size_t dgram_pair_write_inner(struct bio_dgram_pair_st *b, const uint8_t *buf, size_t sz)
+static size_t dgram_pair_write_inner(struct bio_dgram_pair_st *b,
+                                     const uint8_t *buf, size_t sz)
 {
     size_t total_written = 0;
 
@@ -1166,7 +1191,7 @@ static size_t dgram_pair_write_inner(struct bio_dgram_pair_st *b, const uint8_t 
         if (dst_len == 0) {
             size_t new_len;
 
-            if (!b->fixed_size) /* resizeable only unless size not set explicitly */
+            if (!b->grows_on_write) /* resize only if size not set explicitly */
                 break;
             /* increase the size */
             new_len = compute_rbuf_growth(b->req_buf_len + sz, b->req_buf_len);
@@ -1226,6 +1251,8 @@ static ossl_ssize_t dgram_pair_write_actual(BIO *bio, const char *buf, size_t sz
 
     hdr.len = sz;
     hdr.dst_addr = (peer != NULL ? *peer : zero_addr);
+    if (local == NULL)
+        local = b->local_addr;
     hdr.src_addr = (local != NULL ? *local : zero_addr);
 
     saved_idx   = b->rbuf.idx[0];
@@ -1265,7 +1292,7 @@ static int dgram_pair_write(BIO *bio, const char *buf, int sz_)
 
     l = dgram_pair_write_actual(bio, buf, (size_t)sz_, NULL, NULL, 0);
     if (l < 0) {
-        ERR_raise(ERR_LIB_BIO, -l);
+        ERR_raise(ERR_LIB_BIO, (int)-l);
         ret = -1;
     } else {
         ret = (int)l;
@@ -1280,10 +1307,11 @@ static int dgram_pair_sendmmsg(BIO *bio, BIO_MSG *msg,
                                size_t stride, size_t num_msg,
                                uint64_t flags, size_t *num_processed)
 {
-    ossl_ssize_t ret, l;
+    ossl_ssize_t l;
     BIO_MSG *m;
     size_t i;
     struct bio_dgram_pair_st *b = bio->ptr;
+    int ret = 0;
 
     if (num_msg == 0) {
         *num_processed = 0;
@@ -1305,8 +1333,7 @@ static int dgram_pair_sendmmsg(BIO *bio, BIO_MSG *msg,
             if (i > 0) {
                 ret = 1;
             } else {
-                ERR_raise(ERR_LIB_BIO, -l);
-                ret = 0;
+                ERR_raise(ERR_LIB_BIO, (int)-l);
             }
             goto out;
         }

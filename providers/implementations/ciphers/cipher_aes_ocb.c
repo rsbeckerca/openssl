@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -356,7 +356,7 @@ static int aes_ocb_set_ctx_params(void *vctx, const OSSL_PARAM params[])
     const OSSL_PARAM *p;
     size_t sz;
 
-    if (params == NULL)
+    if (ossl_param_is_empty(params))
         return 1;
 
     p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TAG);
@@ -367,12 +367,20 @@ static int aes_ocb_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         }
         if (p->data == NULL) {
             /* Tag len must be 0 to 16 */
-            if (p->data_size > OCB_MAX_TAG_LEN)
+            if (p->data_size > OCB_MAX_TAG_LEN) {
+                ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_TAG_LENGTH);
                 return 0;
+            }
             ctx->taglen = p->data_size;
         } else {
-            if (p->data_size != ctx->taglen || ctx->base.enc)
+            if (ctx->base.enc) {
+                ERR_raise(ERR_LIB_PROV, ERR_R_PASSED_INVALID_ARGUMENT);
                 return 0;
+            }
+            if (p->data_size != ctx->taglen) {
+                ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_TAG_LENGTH);
+                return 0;
+            }
             memcpy(ctx->tag, p->data, p->data_size);
         }
      }
@@ -385,7 +393,10 @@ static int aes_ocb_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         /* IV len must be 1 to 15 */
         if (sz < OCB_MIN_IV_LEN || sz > OCB_MAX_IV_LEN)
             return 0;
-        ctx->base.ivlen = sz;
+        if (ctx->base.ivlen != sz) {
+            ctx->base.ivlen = sz;
+            ctx->iv_state = IV_STATE_UNINITIALISED;
+        }
     }
     p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
     if (p != NULL) {
@@ -432,8 +443,7 @@ static int aes_ocb_get_ctx_params(void *vctx, OSSL_PARAM params[])
             ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_IV_LENGTH);
             return 0;
         }
-        if (!OSSL_PARAM_set_octet_string(p, ctx->base.oiv, ctx->base.ivlen)
-            && !OSSL_PARAM_set_octet_ptr(p, &ctx->base.oiv, ctx->base.ivlen)) {
+        if (!OSSL_PARAM_set_octet_string_or_ptr(p, ctx->base.oiv, ctx->base.ivlen)) {
             ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_SET_PARAMETER);
             return 0;
         }
@@ -444,8 +454,7 @@ static int aes_ocb_get_ctx_params(void *vctx, OSSL_PARAM params[])
             ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_IV_LENGTH);
             return 0;
         }
-        if (!OSSL_PARAM_set_octet_string(p, ctx->base.iv, ctx->base.ivlen)
-            && !OSSL_PARAM_set_octet_ptr(p, &ctx->base.iv, ctx->base.ivlen)) {
+        if (!OSSL_PARAM_set_octet_string_or_ptr(p, ctx->base.iv, ctx->base.ivlen)) {
             ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_SET_PARAMETER);
             return 0;
         }

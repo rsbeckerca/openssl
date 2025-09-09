@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2019, Oracle and/or its affiliates.  All rights reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
@@ -19,7 +19,7 @@
  * depth of the tree but potentially wastes more memory.  That is, this is a
  * direct space versus time tradeoff.
  *
- * The default is to use four bits which means that the are 16
+ * The default is to use four bits which means that there are 16
  * pointers in each tree node.
  *
  * The library builder is also permitted to define other sizes in the closed
@@ -173,7 +173,7 @@ void *ossl_sa_get(const OPENSSL_SA *sa, ossl_uintmax_t n)
 
 static ossl_inline void **alloc_node(void)
 {
-    return OPENSSL_zalloc(SA_BLOCK_MAX * sizeof(void *));
+    return OPENSSL_calloc(SA_BLOCK_MAX, sizeof(void *));
 }
 
 int ossl_sa_set(OPENSSL_SA *sa, ossl_uintmax_t posn, void *val)

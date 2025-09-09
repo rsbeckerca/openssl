@@ -123,6 +123,7 @@
 -T CMAC_CTX
 -T CMS_AuthenticatedData
 -T CMS_CertificateChoices
+-T CMS_CMSORIforKEMOtherInfo
 -T CMS_CompressedData
 -T CMS_ContentInfo
 -T CMS_DigestedData
@@ -133,6 +134,7 @@
 -T CMS_IssuerAndSerialNumber
 -T CMS_KEKIdentifier
 -T CMS_KEKRecipientInfo
+-T CMS_KEMRecipientInfo
 -T CMS_KeyAgreeRecipientIdentifier
 -T CMS_KeyAgreeRecipientInfo
 -T CMS_KeyTransRecipientInfo
@@ -382,7 +384,6 @@
 -T SRTP_PROTECTION_PROFILE
 -T SSL
 -T TLS_BUFFER
--T SSL3_COMP
 -T SSL3_ENC_METHOD
 -T TLS_RL_RECORD
 -T SSL3_STATE
@@ -601,7 +602,6 @@
 -T clock_t
 -T custom_ext_methods
 -T hm_fragment
--T record_pqueue
 -T ssl_ctx_st
 -T ssl_flag_tbl
 -T ssl_st

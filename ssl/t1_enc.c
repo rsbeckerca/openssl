@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright 2005 Nokia. All rights reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
@@ -13,6 +13,7 @@
 #include "record/record_local.h"
 #include "internal/ktls.h"
 #include "internal/cryptlib.h"
+#include "internal/ssl_unwrap.h"
 #include <openssl/comp.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -100,44 +101,6 @@ static int tls1_generate_key_block(SSL_CONNECTION *s, unsigned char *km,
 
     return ret;
 }
-
-int tls_provider_set_tls_params(SSL_CONNECTION *s, EVP_CIPHER_CTX *ctx,
-                                const EVP_CIPHER *ciph,
-                                const EVP_MD *md)
-{
-    /*
-     * Provided cipher, the TLS padding/MAC removal is performed provider
-     * side so we need to tell the ctx about our TLS version and mac size
-     */
-    OSSL_PARAM params[3], *pprm = params;
-    size_t macsize = 0;
-    int imacsize = -1;
-
-    if ((EVP_CIPHER_get_flags(ciph) & EVP_CIPH_FLAG_AEAD_CIPHER) == 0
-               /*
-                * We look at s->ext.use_etm instead of SSL_READ_ETM() or
-                * SSL_WRITE_ETM() because this test applies to both reading
-                * and writing.
-                */
-            && !s->ext.use_etm)
-        imacsize = EVP_MD_get_size(md);
-    if (imacsize >= 0)
-        macsize = (size_t)imacsize;
-
-    *pprm++ = OSSL_PARAM_construct_int(OSSL_CIPHER_PARAM_TLS_VERSION,
-                                       &s->version);
-    *pprm++ = OSSL_PARAM_construct_size_t(OSSL_CIPHER_PARAM_TLS_MAC_SIZE,
-                                          &macsize);
-    *pprm = OSSL_PARAM_construct_end();
-
-    if (!EVP_CIPHER_CTX_set_params(ctx, params)) {
-        SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
-        return 0;
-    }
-
-    return 1;
-}
-
 
 static int tls_iv_length_within_key_block(const EVP_CIPHER *c)
 {
@@ -266,6 +229,9 @@ int tls1_change_cipher_state(SSL_CONNECTION *s, int which)
         direction = OSSL_RECORD_DIRECTION_WRITE;
     }
 
+    if (SSL_CONNECTION_IS_DTLS(s))
+        dtls1_increment_epoch(s, which);
+
     if (!ssl_set_new_record_layer(s, s->version, direction,
                                     OSSL_RECORD_PROTECTION_LEVEL_APPLICATION,
                                     NULL, 0, key, cl, iv, (size_t)k, mac_secret,
@@ -279,7 +245,7 @@ int tls1_change_cipher_state(SSL_CONNECTION *s, int which)
         BIO_printf(trc_out, "which = %04X, key:\n", which);
         BIO_dump_indent(trc_out, key, EVP_CIPHER_get_key_length(c), 4);
         BIO_printf(trc_out, "iv:\n");
-        BIO_dump_indent(trc_out, iv, k, 4);
+        BIO_dump_indent(trc_out, iv, (int)k, 4);
     } OSSL_TRACE_END(TLS);
 
     return 1;
@@ -342,7 +308,7 @@ int tls1_setup_key_block(SSL_CONNECTION *s)
         BIO_printf(trc_out, "master key\n");
         BIO_dump_indent(trc_out,
                         s->session->master_key,
-                        s->session->master_key_length, 4);
+                        (int)s->session->master_key_length, 4);
     } OSSL_TRACE_END(TLS);
 
     if (!tls1_generate_key_block(s, p, num)) {
@@ -352,7 +318,7 @@ int tls1_setup_key_block(SSL_CONNECTION *s)
 
     OSSL_TRACE_BEGIN(TLS) {
         BIO_printf(trc_out, "key block\n");
-        BIO_dump_indent(trc_out, p, num, 4);
+        BIO_dump_indent(trc_out, p, (int)num, 4);
     } OSSL_TRACE_END(TLS);
 
     ret = 1;
@@ -409,7 +375,7 @@ int tls1_generate_master_secret(SSL_CONNECTION *s, unsigned char *out,
         }
         OSSL_TRACE_BEGIN(TLS) {
             BIO_printf(trc_out, "Handshake hashes:\n");
-            BIO_dump(trc_out, (char *)hash, hashlen);
+            BIO_dump(trc_out, (char *)hash, (int)hashlen);
         } OSSL_TRACE_END(TLS);
         if (!tls1_PRF(s,
                       TLS_MD_EXTENDED_MASTER_SECRET_CONST,
@@ -439,7 +405,7 @@ int tls1_generate_master_secret(SSL_CONNECTION *s, unsigned char *out,
 
     OSSL_TRACE_BEGIN(TLS) {
         BIO_printf(trc_out, "Premaster Secret:\n");
-        BIO_dump_indent(trc_out, p, len, 4);
+        BIO_dump_indent(trc_out, p, (int)len, 4);
         BIO_printf(trc_out, "Client Random:\n");
         BIO_dump_indent(trc_out, s->s3.client_random, SSL3_RANDOM_SIZE, 4);
         BIO_printf(trc_out, "Server Random:\n");
@@ -462,6 +428,15 @@ int tls1_export_keying_material(SSL_CONNECTION *s, unsigned char *out,
     unsigned char *val = NULL;
     size_t vallen = 0, currentvalpos;
     int rv = 0;
+
+    /*
+     * RFC 5705 embeds context length as uint16; reject longer context
+     * before proceeding.
+     */
+    if (contextlen > 0xffff) {
+        ERR_raise(ERR_LIB_SSL, ERR_R_PASSED_INVALID_ARGUMENT);
+        return 0;
+    }
 
     /*
      * construct PRF arguments we construct the PRF argument ourself rather

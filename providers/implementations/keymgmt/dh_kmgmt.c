@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -12,16 +12,19 @@
  * internal use.
  */
 #include "internal/deprecated.h"
+#include "internal/common.h"
 
 #include <string.h> /* strcmp */
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
 #include <openssl/bn.h>
 #include <openssl/err.h>
+#include <openssl/self_test.h>
 #include "prov/implementations.h"
 #include "prov/providercommon.h"
 #include "prov/provider_ctx.h"
 #include "crypto/dh.h"
+#include "internal/fips.h"
 #include "internal/sizes.h"
 
 static OSSL_FUNC_keymgmt_new_fn dh_newdata;
@@ -222,6 +225,9 @@ static int dh_export(void *keydata, int selection, OSSL_CALLBACK *param_cb,
     if (!ossl_prov_is_running() || dh == NULL)
         return 0;
 
+    if ((selection & DH_POSSIBLE_SELECTIONS) == 0)
+        return 0;
+
     tmpl = OSSL_PARAM_BLD_new();
     if (tmpl == NULL)
         return 0;
@@ -330,6 +336,9 @@ static ossl_inline int dh_get_params(void *key, OSSL_PARAM params[])
         if (p->return_size == 0)
             return 0;
     }
+    if ((p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_SECURITY_CATEGORY)) != NULL)
+        if (!OSSL_PARAM_set_int(p, 0))
+            return 0;
 
     return ossl_dh_params_todata(dh, NULL, params)
         && ossl_dh_key_todata(dh, NULL, params, 1);
@@ -339,6 +348,7 @@ static const OSSL_PARAM dh_params[] = {
     OSSL_PARAM_int(OSSL_PKEY_PARAM_BITS, NULL),
     OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
     OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
+    OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_CATEGORY, NULL),
     OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0),
     DH_IMEXPORTABLE_PARAMETERS,
     DH_IMEXPORTABLE_PUBLIC_KEY,
@@ -384,12 +394,14 @@ static int dh_validate_public(const DH *dh, int checktype)
     if (pub_key == NULL)
         return 0;
 
-    /* The partial test is only valid for named group's with q = (p - 1) / 2 */
-    if (checktype == OSSL_KEYMGMT_VALIDATE_QUICK_CHECK
-        && ossl_dh_is_named_safe_prime_group(dh))
+    /*
+     * The partial test is only valid for named group's with q = (p - 1) / 2
+     * but for that case it is also fully sufficient to check the key validity.
+     */
+    if (ossl_dh_is_named_safe_prime_group(dh))
         return ossl_dh_check_pub_key_partial(dh, pub_key, &res);
 
-    return DH_check_pub_key(dh, pub_key, &res);
+    return DH_check_pub_key_ex(dh, pub_key);
 }
 
 static int dh_validate_private(const DH *dh)
@@ -434,7 +446,7 @@ static int dh_validate(const void *keydata, int selection, int checktype)
 
     if ((selection & OSSL_KEYMGMT_SELECT_KEYPAIR)
             == OSSL_KEYMGMT_SELECT_KEYPAIR)
-        ok = ok && ossl_dh_check_pairwise(dh);
+        ok = ok && ossl_dh_check_pairwise(dh, 0);
     return ok;
 }
 
@@ -521,20 +533,23 @@ static int dh_gen_common_set_params(void *genctx, const OSSL_PARAM params[])
 {
     struct dh_gen_ctx *gctx = genctx;
     const OSSL_PARAM *p;
+    int gen_type = -1;
 
     if (gctx == NULL)
         return 0;
-    if (params == NULL)
+    if (ossl_param_is_empty(params))
         return 1;
 
     p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_FFC_TYPE);
     if (p != NULL) {
         if (p->data_type != OSSL_PARAM_UTF8_STRING
-            || ((gctx->gen_type =
+            || ((gen_type =
                  dh_gen_type_name2id_w_default(p->data, gctx->dh_type)) == -1)) {
             ERR_raise(ERR_LIB_PROV, ERR_R_PASSED_INVALID_ARGUMENT);
             return 0;
         }
+        if (gen_type != -1)
+            gctx->gen_type = gen_type;
     }
     p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_GROUP_NAME);
     if (p != NULL) {
@@ -696,19 +711,32 @@ static void *dh_gen(void *genctx, OSSL_CALLBACK *osslcb, void *cbarg)
         return NULL;
 
     /*
-     * If a group name is selected then the type is group regardless of what the
+     * If a group name is selected then the type is group regardless of what
      * the user selected. This overrides rather than errors for backwards
      * compatibility.
      */
     if (gctx->group_nid != NID_undef)
         gctx->gen_type = DH_PARAMGEN_TYPE_GROUP;
 
+    /*
+     * Do a bounds check on context gen_type. Must be in range:
+     * DH_PARAMGEN_TYPE_GENERATOR <= gen_type <= DH_PARAMGEN_TYPE_GROUP
+     * Noted here as this needs to be adjusted if a new group type is
+     * added.
+     */
+    if (!ossl_assert((gctx->gen_type >= DH_PARAMGEN_TYPE_GENERATOR)
+                    && (gctx->gen_type <= DH_PARAMGEN_TYPE_GROUP))) {
+        ERR_raise_data(ERR_LIB_PROV, ERR_R_INTERNAL_ERROR,
+                       "gen_type set to unsupported value %d", gctx->gen_type);
+        return NULL;
+    }
+
     /* For parameter generation - If there is a group name just create it */
     if (gctx->gen_type == DH_PARAMGEN_TYPE_GROUP
             && gctx->ffc_params == NULL) {
         /* Select a named group if there is not one already */
         if (gctx->group_nid == NID_undef)
-            gctx->group_nid = ossl_dh_get_named_group_uid_from_size(gctx->pbits);
+            gctx->group_nid = ossl_dh_get_named_group_uid_from_size((int)gctx->pbits);
         if (gctx->group_nid == NID_undef)
             return NULL;
         dh = ossl_dh_new_by_nid_ex(gctx->libctx, gctx->group_nid);
@@ -750,12 +778,12 @@ static void *dh_gen(void *genctx, OSSL_CALLBACK *osslcb, void *cbarg)
              * group based on pbits.
              */
             if (gctx->gen_type == DH_PARAMGEN_TYPE_GENERATOR)
-                ret = DH_generate_parameters_ex(dh, gctx->pbits,
+                ret = DH_generate_parameters_ex(dh, (int)gctx->pbits,
                                                 gctx->generator, gencb);
             else
                 ret = ossl_dh_generate_ffc_parameters(dh, gctx->gen_type,
-                                                      gctx->pbits, gctx->qbits,
-                                                      gencb);
+                                                      (int)gctx->pbits,
+                                                      (int)gctx->qbits, gencb);
             if (ret <= 0)
                 goto end;
         }
@@ -770,6 +798,15 @@ static void *dh_gen(void *genctx, OSSL_CALLBACK *osslcb, void *cbarg)
                                      gctx->gen_type == DH_PARAMGEN_TYPE_FIPS_186_2);
         if (DH_generate_key(dh) <= 0)
             goto end;
+#ifdef FIPS_MODULE
+        if (!ossl_fips_self_testing()) {
+            ret = ossl_dh_check_pairwise(dh, 0);
+            if (ret <= 0) {
+                ossl_set_error_state(OSSL_SELF_TEST_TYPE_PCT);
+                goto end;
+            }
+        }
+#endif /* FIPS_MODULE */
     }
     DH_clear_flags(dh, DH_FLAG_TYPE_MASK);
     DH_set_flags(dh, gctx->dh_type);

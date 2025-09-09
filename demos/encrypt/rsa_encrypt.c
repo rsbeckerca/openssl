@@ -1,5 +1,5 @@
 /*-
- * Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -139,7 +139,7 @@ static int do_encrypt(OSSL_LIB_CTX *libctx,
     *out_len = buf_len;
     *out = buf;
     fprintf(stdout, "Encrypted:\n");
-    BIO_dump_indent_fp(stdout, buf, buf_len, 2);
+    BIO_dump_indent_fp(stdout, buf, (int)buf_len, 2);
     fprintf(stdout, "\n");
     ret = 1;
 
@@ -151,7 +151,7 @@ cleanup:
     return ret;
 }
 
-static int do_decrypt(OSSL_LIB_CTX *libctx, const char *in, size_t in_len,
+static int do_decrypt(OSSL_LIB_CTX *libctx, const unsigned char *in, size_t in_len,
                       unsigned char **out, size_t *out_len)
 {
     int ret = 0, public = 0;
@@ -198,7 +198,7 @@ static int do_decrypt(OSSL_LIB_CTX *libctx, const char *in, size_t in_len,
     *out_len = buf_len;
     *out = buf;
     fprintf(stdout, "Decrypted:\n");
-    BIO_dump_indent_fp(stdout, buf, buf_len, 2);
+    BIO_dump_indent_fp(stdout, buf, (int)buf_len, 2);
     fprintf(stdout, "\n");
     ret = 1;
 

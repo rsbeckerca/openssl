@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -12,6 +12,7 @@
 #include <assert.h>
 #include "internal/priority_queue.h"
 #include "internal/safe_math.h"
+#include "internal/numbers.h"
 
 OSSL_SAFE_MATH_UNSIGNED(size_t, size_t)
 
@@ -45,8 +46,7 @@ struct pq_elem_st {
 #endif
 };
 
-struct ossl_pqueue_st
-{
+struct ossl_pqueue_st {
     struct pq_heap_st *heap;
     struct pq_elem_st *elements;
     int (*compare)(const void *, const void *);
@@ -264,8 +264,14 @@ void *ossl_pqueue_remove(OSSL_PQUEUE *pq, size_t elem)
 
     ASSERT_USED(pq, n);
 
-    if (n == pq->htop - 1)
+    if (n == pq->htop - 1) {
+        pq->elements[elem].posn = pq->freelist;
+        pq->freelist = elem;
+#ifndef NDEBUG
+        pq->elements[elem].used = 0;
+#endif
         return pq->heap[--pq->htop].data;
+    }
     if (n > 0)
         pqueue_force_bottom(pq, n);
     return ossl_pqueue_pop(pq);
@@ -304,12 +310,12 @@ int ossl_pqueue_reserve(OSSL_PQUEUE *pq, size_t n)
         return 0;
     }
 
-    h = OPENSSL_realloc(pq->heap, new_max * sizeof(*pq->heap));
+    h = OPENSSL_realloc_array(pq->heap, new_max, sizeof(*pq->heap));
     if (h == NULL)
         return 0;
     pq->heap = h;
 
-    e = OPENSSL_realloc(pq->elements, new_max * sizeof(*pq->elements));
+    e = OPENSSL_realloc_array(pq->elements, new_max, sizeof(*pq->elements));
     if (e == NULL)
         return 0;
     pq->elements = e;
@@ -333,8 +339,8 @@ OSSL_PQUEUE *ossl_pqueue_new(int (*compare)(const void *, const void *))
     pq->hmax = min_nodes;
     pq->htop = 0;
     pq->freelist = 0;
-    pq->heap = OPENSSL_malloc(sizeof(*pq->heap) * min_nodes);
-    pq->elements = OPENSSL_malloc(sizeof(*pq->elements) * min_nodes);
+    pq->heap = OPENSSL_malloc_array(min_nodes, sizeof(*pq->heap));
+    pq->elements = OPENSSL_malloc_array(min_nodes, sizeof(*pq->elements));
     if (pq->heap == NULL || pq->elements == NULL) {
         ossl_pqueue_free(pq);
         return NULL;

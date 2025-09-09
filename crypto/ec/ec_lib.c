@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
@@ -21,6 +21,7 @@
 #include <openssl/opensslv.h>
 #include <openssl/param_build.h>
 #include "crypto/ec.h"
+#include "crypto/bn.h"
 #include "internal/nelem.h"
 #include "ec_local.h"
 
@@ -99,12 +100,16 @@ void EC_pre_comp_free(EC_GROUP *group)
     case PCT_nistp256:
         EC_nistp256_pre_comp_free(group->pre_comp.nistp256);
         break;
+    case PCT_nistp384:
+        ossl_ec_nistp384_pre_comp_free(group->pre_comp.nistp384);
+        break;
     case PCT_nistp521:
         EC_nistp521_pre_comp_free(group->pre_comp.nistp521);
         break;
 #else
     case PCT_nistp224:
     case PCT_nistp256:
+    case PCT_nistp384:
     case PCT_nistp521:
         break;
 #endif
@@ -188,12 +193,16 @@ int EC_GROUP_copy(EC_GROUP *dest, const EC_GROUP *src)
     case PCT_nistp256:
         dest->pre_comp.nistp256 = EC_nistp256_pre_comp_dup(src->pre_comp.nistp256);
         break;
+    case PCT_nistp384:
+        dest->pre_comp.nistp384 = ossl_ec_nistp384_pre_comp_dup(src->pre_comp.nistp384);
+        break;
     case PCT_nistp521:
         dest->pre_comp.nistp521 = EC_nistp521_pre_comp_dup(src->pre_comp.nistp521);
         break;
 #else
     case PCT_nistp224:
     case PCT_nistp256:
+    case PCT_nistp384:
     case PCT_nistp521:
         break;
 #endif
@@ -738,9 +747,13 @@ void EC_POINT_free(EC_POINT *point)
     if (point == NULL)
         return;
 
+#ifdef OPENSSL_PEDANTIC_ZEROIZATION
+    EC_POINT_clear_free(point);
+#else
     if (point->meth->point_finish != 0)
         point->meth->point_finish(point);
     OPENSSL_free(point);
+#endif
 }
 
 void EC_POINT_clear_free(EC_POINT *point)
@@ -1253,10 +1266,10 @@ static int ec_field_inverse_mod_ord(const EC_GROUP *group, BIGNUM *r,
     if (!BN_sub(e, group->order, e))
         goto err;
     /*-
-     * Exponent e is public.
-     * No need for scatter-gather or BN_FLG_CONSTTIME.
+     * Although the exponent is public we want the result to be
+     * fixed top.
      */
-    if (!BN_mod_exp_mont(r, x, e, group->order, ctx, group->mont_data))
+    if (!bn_mod_exp_mont_fixed_top(r, x, e, group->order, ctx, group->mont_data))
         goto err;
 
     ret = 1;

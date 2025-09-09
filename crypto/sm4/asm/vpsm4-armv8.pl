@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -474,7 +474,8 @@ sub load_sbox () {
 	my $data = shift;
 
 $code.=<<___;
-	adr	$ptr,.Lsbox
+	adrp	$ptr,.Lsbox
+	add	$ptr,$ptr,#:lo12:.Lsbox
 	ld1	{@sbox[0].16b,@sbox[1].16b,@sbox[2].16b,@sbox[3].16b},[$ptr],#64
 	ld1	{@sbox[4].16b,@sbox[5].16b,@sbox[6].16b,@sbox[7].16b},[$ptr],#64
 	ld1	{@sbox[8].16b,@sbox[9].16b,@sbox[10].16b,@sbox[11].16b},[$ptr],#64
@@ -524,7 +525,8 @@ sub compute_tweak_vec() {
 	my $std = shift;
 	&rbit(@vtmp[2],$src,$std);
 $code.=<<___;
-	ldr  @qtmp[0], .Lxts_magic
+	adrp $ptr,.Lxts_magic
+	ldr  @qtmp[0], [$ptr, #:lo12:.Lxts_magic]
 	shl  $des.16b, @vtmp[2].16b, #1
 	ext  @vtmp[1].16b, @vtmp[2].16b, @vtmp[2].16b,#15
 	ushr @vtmp[1].16b, @vtmp[1].16b, #7
@@ -539,9 +541,10 @@ $code=<<___;
 .arch	armv8-a
 .text
 
-.type	_vpsm4_consts,%object
+.rodata
+.type	_${prefix}_consts,%object
 .align	7
-_vpsm4_consts:
+_${prefix}_consts:
 .Lsbox:
 	.byte 0xD6,0x90,0xE9,0xFE,0xCC,0xE1,0x3D,0xB7,0x16,0xB6,0x14,0xC2,0x28,0xFB,0x2C,0x05
 	.byte 0x2B,0x67,0x9A,0x76,0x2A,0xBE,0x04,0xC3,0xAA,0x44,0x13,0x26,0x49,0x86,0x06,0x99
@@ -569,13 +572,16 @@ _vpsm4_consts:
 	.long 0xA0A7AEB5, 0xBCC3CAD1, 0xD8DFE6ED, 0xF4FB0209
 	.long 0x10171E25, 0x2C333A41, 0x484F565D, 0x646B7279
 .Lfk:
-	.dword 0x56aa3350a3b1bac6,0xb27022dc677d9197
+	.quad 0x56aa3350a3b1bac6,0xb27022dc677d9197
 .Lshuffles:
-	.dword 0x0B0A090807060504,0x030201000F0E0D0C
+	.quad 0x0B0A090807060504,0x030201000F0E0D0C
 .Lxts_magic:
-	.dword 0x0101010101010187,0x0101010101010101
+	.quad 0x0101010101010187,0x0101010101010101
 
-.size	_vpsm4_consts,.-_vpsm4_consts
+.size	_${prefix}_consts,.-_${prefix}_consts
+
+.previous
+
 ___
 
 {{{
@@ -592,13 +598,16 @@ ___
 	&load_sbox();
 	&rev32($vkey,$vkey);
 $code.=<<___;
-	adr	$pointer,.Lshuffles
+	adrp	$pointer,.Lshuffles
+	add	$pointer,$pointer,#:lo12:.Lshuffles
 	ld1	{$vmap.2d},[$pointer]
-	adr	$pointer,.Lfk
+	adrp	$pointer,.Lfk
+	add	$pointer,$pointer,#:lo12:.Lfk
 	ld1	{$vfk.2d},[$pointer]
 	eor	$vkey.16b,$vkey.16b,$vfk.16b
 	mov	$schedules,#32
-	adr	$pointer,.Lck
+	adrp	$pointer,.Lck
+	add	$pointer,$pointer,#:lo12:.Lck
 	movi	@vtmp[0].16b,#64
 	cbnz	$enc,1f
 	add	$keys,$keys,124
@@ -937,7 +946,7 @@ ___
 $code.=<<___;
 	ld1	{$ivec1.4s},[$ivp]
 	ld1	{@datax[0].4s,@datax[1].4s,@datax[2].4s,@datax[3].4s},[$inp],#64
-	// note ivec1 and vtmpx[3] are resuing the same register
+	// note ivec1 and vtmpx[3] are reusing the same register
 	// care needs to be taken to avoid conflict
 	eor	@vtmp[0].16b,@vtmp[0].16b,$ivec1.16b
 	ld1	{@vtmpx[0].4s,@vtmpx[1].4s,@vtmpx[2].4s,@vtmpx[3].4s},[$inp],#64
@@ -1477,7 +1486,7 @@ $code.=<<___;
 	cmp $remain,0
 	b.eq .return${std}
 
-// This brance calculates the last two tweaks, 
+// This branch calculates the last two tweaks, 
 // while the encryption/decryption length is larger than 32
 .last_2blks_tweak${std}:
 	ld1	{@tweak[0].4s},[$ivp]
@@ -1489,13 +1498,13 @@ $code.=<<___;
 	b .check_dec${std}
 
 
-// This brance calculates the last two tweaks, 
+// This branch calculates the last two tweaks, 
 // while the encryption/decryption length is equal to 32, who only need two tweaks
 .only_2blks_tweak${std}:
 	mov @tweak[1].16b,@tweak[0].16b
 ___
 	&rev32_armeb(@tweak[1],@tweak[1]);
-	&compute_tweak_vec(@tweak[1],@tweak[2]);
+	&compute_tweak_vec(@tweak[1],@tweak[2],$std);
 $code.=<<___;
 	b .check_dec${std}
 
@@ -1505,12 +1514,12 @@ $code.=<<___;
 .check_dec${std}:
 	// encryption:1 decryption:0
 	cmp $enc,1
-	b.eq .prcess_last_2blks${std}
+	b.eq .process_last_2blks${std}
 	mov @vtmp[0].16B,@tweak[1].16b
 	mov @tweak[1].16B,@tweak[2].16b
 	mov @tweak[2].16B,@vtmp[0].16b
 
-.prcess_last_2blks${std}:
+.process_last_2blks${std}:
 ___
 	&rev32_armeb(@tweak[1],@tweak[1]);
 	&rev32_armeb(@tweak[2],@tweak[2]);

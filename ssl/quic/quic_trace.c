@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -9,7 +9,12 @@
 
 #include <openssl/bio.h>
 #include "../ssl_local.h"
+#include "internal/quic_trace.h"
+#include "internal/quic_ssl.h"
+#include "internal/quic_channel.h"
 #include "internal/quic_wire_pkt.h"
+#include "internal/quic_wire.h"
+#include "internal/ssl_unwrap.h"
 
 static const char *packet_type(int type)
 {
@@ -68,7 +73,7 @@ static void put_conn_id(BIO *bio, QUIC_CONN_ID *id)
 static void put_token(BIO *bio, const uint8_t *token, size_t token_len)
 {
     if (token_len == 0)
-        BIO_puts(bio, "<zerlo length token>");
+        BIO_puts(bio, "<zero length token>");
     else
         put_data(bio, token, token_len);
 }
@@ -79,20 +84,21 @@ static int frame_ack(BIO *bio, PACKET *pkt)
     OSSL_QUIC_ACK_RANGE *ack_ranges = NULL;
     uint64_t total_ranges = 0;
     uint64_t i;
+    int ret = 0;
 
     if (!ossl_quic_wire_peek_frame_ack_num_ranges(pkt, &total_ranges)
         /* In case sizeof(uint64_t) > sizeof(size_t) */
         || total_ranges > SIZE_MAX / sizeof(ack_ranges[0])
         || (ack_ranges = OPENSSL_zalloc(sizeof(ack_ranges[0])
                                         * (size_t)total_ranges)) == NULL)
-        return 0;
+        return ret;
 
     ack.ack_ranges = ack_ranges;
     ack.num_ack_ranges = (size_t)total_ranges;
 
     /* Ack delay exponent is 0, so we can get the raw delay time below */
     if (!ossl_quic_wire_decode_frame_ack(pkt, 0, &ack, NULL))
-        return 0;
+        goto end;
 
     BIO_printf(bio, "    Largest acked: %llu\n",
                (unsigned long long)ack.ack_ranges[0].end);
@@ -112,8 +118,10 @@ static int frame_ack(BIO *bio, PACKET *pkt)
                                         - ack.ack_ranges[i].start));
     }
 
+    ret = 1;
+end:
     OPENSSL_free(ack_ranges);
-    return 1;
+    return ret;
 }
 
 static int frame_reset_stream(BIO *bio, PACKET *pkt)
@@ -330,7 +338,8 @@ static int frame_new_conn_id(BIO *bio, PACKET *pkt)
     BIO_puts(bio, "    Connection id: ");
     put_conn_id(bio, &frame_data.conn_id);
     BIO_puts(bio, "\n    Stateless Reset Token: ");
-    put_data(bio, frame_data.stateless_reset_token, 16);
+    put_data(bio, frame_data.stateless_reset.token,
+             sizeof(frame_data.stateless_reset.token));
     BIO_puts(bio, "\n");
 
     return 1;
@@ -355,7 +364,7 @@ static int frame_path_challenge(BIO *bio, PACKET *pkt)
     if (!ossl_quic_wire_decode_frame_path_challenge(pkt, &data))
         return 0;
 
-    BIO_printf(bio, "    Data: %016lx\n", data);
+    BIO_printf(bio, "    Data: %016llx\n", (unsigned long long)data);
 
     return 1;
 }
@@ -367,7 +376,7 @@ static int frame_path_response(BIO *bio, PACKET *pkt)
     if (!ossl_quic_wire_decode_frame_path_response(pkt, &data))
         return 0;
 
-    BIO_printf(bio, "    Data: %016lx\n", data);
+    BIO_printf(bio, "    Data: %016llx\n", (unsigned long long)data);
 
     return 1;
 }
@@ -392,7 +401,7 @@ static int trace_frame_data(BIO *bio, PACKET *pkt)
 {
     uint64_t frame_type;
 
-    if (!ossl_quic_wire_peek_frame_header(pkt, &frame_type))
+    if (!ossl_quic_wire_peek_frame_header(pkt, &frame_type, NULL))
         return 0;
 
     switch (frame_type) {
@@ -557,12 +566,14 @@ int ossl_quic_trace(int write_p, int version, int content_type,
 {
     BIO *bio = arg;
     PACKET pkt;
+    size_t id_len = 0;
+    QUIC_CHANNEL *ch;
 
     switch (content_type) {
     case SSL3_RT_QUIC_DATAGRAM:
         BIO_puts(bio, write_p ? "Sent" : "Received");
         /*
-         * Unfortunately there is no way of receiving auxilliary information
+         * Unfortunately there is no way of receiving auxiliary information
          * about the datagram through the msg_callback API such as the peer
          * address
          */
@@ -577,18 +588,18 @@ int ossl_quic_trace(int write_p, int version, int content_type,
             if (!PACKET_buf_init(&pkt, buf, msglen))
                 return 0;
             /* Decode the packet header */
-            /*
-             * TODO(QUIC): We need to query the short connection id len here,
-             *             e.g. via some API SSL_get_short_conn_id_len()
-             */
-            if (ossl_quic_wire_decode_pkt_hdr(&pkt, 0, 0, 1, &hdr, NULL) != 1)
+            ch = ossl_quic_conn_get_channel(ssl);
+            id_len = ossl_quic_channel_get_short_header_conn_id_len(ch);
+            if (ossl_quic_wire_decode_pkt_hdr(&pkt, id_len, 0, 1, &hdr, NULL,
+                                              NULL) != 1)
                 return 0;
 
             BIO_puts(bio, write_p ? "Sent" : "Received");
             BIO_puts(bio, " Packet\n");
             BIO_printf(bio, "  Packet Type: %s\n", packet_type(hdr.type));
             if (hdr.type != QUIC_PKT_TYPE_1RTT)
-                BIO_printf(bio, "  Version: 0x%08x\n", hdr.version);
+                BIO_printf(bio, "  Version: 0x%08lx\n",
+                           (unsigned long)hdr.version);
             BIO_puts(bio, "  Destination Conn Id: ");
             put_conn_id(bio, &hdr.dst_conn_id);
             BIO_puts(bio, "\n");

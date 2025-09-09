@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -169,8 +169,11 @@ int X509v3_asid_add_inherit(ASIdentifiers *asid, int which)
     if (*choice == NULL) {
         if ((*choice = ASIdentifierChoice_new()) == NULL)
             return 0;
-        if (((*choice)->u.inherit = ASN1_NULL_new()) == NULL)
+        if (((*choice)->u.inherit = ASN1_NULL_new()) == NULL) {
+            ASIdentifierChoice_free(*choice);
+            *choice = NULL;
             return 0;
+        }
         (*choice)->type = ASIdentifierChoice_inherit;
     }
     return (*choice)->type == ASIdentifierChoice_inherit;
@@ -196,18 +199,23 @@ int X509v3_asid_add_id_or_range(ASIdentifiers *asid,
     default:
         return 0;
     }
-    if (*choice != NULL && (*choice)->type == ASIdentifierChoice_inherit)
+    if (*choice != NULL && (*choice)->type != ASIdentifierChoice_asIdsOrRanges)
         return 0;
     if (*choice == NULL) {
         if ((*choice = ASIdentifierChoice_new()) == NULL)
             return 0;
         (*choice)->u.asIdsOrRanges = sk_ASIdOrRange_new(ASIdOrRange_cmp);
-        if ((*choice)->u.asIdsOrRanges == NULL)
+        if ((*choice)->u.asIdsOrRanges == NULL) {
+            ASIdentifierChoice_free(*choice);
+            *choice = NULL;
             return 0;
+        }
         (*choice)->type = ASIdentifierChoice_asIdsOrRanges;
     }
     if ((aor = ASIdOrRange_new()) == NULL)
         return 0;
+    if (!sk_ASIdOrRange_reserve((*choice)->u.asIdsOrRanges, 1))
+        goto err;
     if (max == NULL) {
         aor->type = ASIdOrRange_id;
         aor->u.id = min;
@@ -220,7 +228,8 @@ int X509v3_asid_add_id_or_range(ASIdentifiers *asid,
         ASN1_INTEGER_free(aor->u.range->max);
         aor->u.range->max = max;
     }
-    if (!(sk_ASIdOrRange_push((*choice)->u.asIdsOrRanges, aor)))
+    /* Cannot fail due to the reservation above */
+    if (!ossl_assert(sk_ASIdOrRange_push((*choice)->u.asIdsOrRanges, aor)))
         goto err;
     return 1;
 
@@ -536,6 +545,11 @@ static void *v2i_ASIdentifiers(const struct v3_ext_method *method,
             goto err;
         }
 
+        if (val->value == NULL) {
+            ERR_raise(ERR_LIB_X509V3, X509V3_R_EXTENSION_VALUE_ERROR);
+            goto err;
+        }
+
         /*
          * Handle inheritance.
          */
@@ -550,20 +564,20 @@ static void *v2i_ASIdentifiers(const struct v3_ext_method *method,
         /*
          * Number, range, or mistake, pick it apart and figure out which.
          */
-        i1 = strspn(val->value, "0123456789");
+        i1 = (int)strspn(val->value, "0123456789");
         if (val->value[i1] == '\0') {
             is_range = 0;
         } else {
             is_range = 1;
-            i2 = i1 + strspn(val->value + i1, " \t");
+            i2 = i1 + (int)strspn(val->value + i1, " \t");
             if (val->value[i2] != '-') {
                 ERR_raise(ERR_LIB_X509V3, X509V3_R_INVALID_ASNUMBER);
                 X509V3_conf_add_error_name_value(val);
                 goto err;
             }
             i2++;
-            i2 = i2 + strspn(val->value + i2, " \t");
-            i3 = i2 + strspn(val->value + i2, "0123456789");
+            i2 = i2 + (int)strspn(val->value + i2, " \t");
+            i3 = i2 + (int)strspn(val->value + i2, "0123456789");
             if (val->value[i3] != '\0') {
                 ERR_raise(ERR_LIB_X509V3, X509V3_R_INVALID_ASRANGE);
                 X509V3_conf_add_error_name_value(val);

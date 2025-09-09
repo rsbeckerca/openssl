@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2010-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -238,7 +238,6 @@ static const felem gmul[2][16][3] = {
 struct nistp224_pre_comp_st {
     felem g_pre_comp[2][16][3];
     CRYPTO_REF_COUNT references;
-    CRYPTO_RWLOCK *lock;
 };
 
 const EC_METHOD *EC_GFp_nistp224_method(void)
@@ -1241,11 +1240,8 @@ static NISTP224_PRE_COMP *nistp224_pre_comp_new(void)
     if (ret == NULL)
         return ret;
 
-    ret->references = 1;
 
-    ret->lock = CRYPTO_THREAD_lock_new();
-    if (ret->lock == NULL) {
-        ERR_raise(ERR_LIB_EC, ERR_R_CRYPTO_LIB);
+    if (!CRYPTO_NEW_REF(&ret->references, 1)) {
         OPENSSL_free(ret);
         return NULL;
     }
@@ -1256,7 +1252,7 @@ NISTP224_PRE_COMP *EC_nistp224_pre_comp_dup(NISTP224_PRE_COMP *p)
 {
     int i;
     if (p != NULL)
-        CRYPTO_UP_REF(&p->references, &i, p->lock);
+        CRYPTO_UP_REF(&p->references, &i);
     return p;
 }
 
@@ -1267,13 +1263,13 @@ void EC_nistp224_pre_comp_free(NISTP224_PRE_COMP *p)
     if (p == NULL)
         return;
 
-    CRYPTO_DOWN_REF(&p->references, &i, p->lock);
-    REF_PRINT_COUNT("EC_nistp224", p);
+    CRYPTO_DOWN_REF(&p->references, &i);
+    REF_PRINT_COUNT("EC_nistp224", i, p);
     if (i > 0)
         return;
     REF_ASSERT_ISNT(i < 0);
 
-    CRYPTO_THREAD_lock_free(p->lock);
+    CRYPTO_FREE_REF(&p->references);
     OPENSSL_free(p);
 }
 
@@ -1479,11 +1475,11 @@ int ossl_ec_GFp_nistp224_points_mul(const EC_GROUP *group, EC_POINT *r,
              */
             mixed = 1;
         }
-        secrets = OPENSSL_zalloc(sizeof(*secrets) * num_points);
-        pre_comp = OPENSSL_zalloc(sizeof(*pre_comp) * num_points);
+        secrets = OPENSSL_calloc(num_points, sizeof(*secrets));
+        pre_comp = OPENSSL_calloc(num_points, sizeof(*pre_comp));
         if (mixed)
             tmp_felems =
-                OPENSSL_malloc(sizeof(felem) * (num_points * 17 + 1));
+                OPENSSL_malloc_array(num_points * 17 + 1, sizeof(felem));
         if ((secrets == NULL) || (pre_comp == NULL)
             || (mixed && (tmp_felems == NULL)))
             goto err;

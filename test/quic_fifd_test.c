@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -162,7 +162,7 @@ static int test_generic(INFO *info, int kind)
     cfq_freed = 0;
     if (!TEST_ptr(cfq_item = ossl_quic_cfq_add_frame(info->cfq, 10,
                                                      pn_space,
-                                                     OSSL_QUIC_FRAME_TYPE_NEW_CONN_ID,
+                                                     OSSL_QUIC_FRAME_TYPE_NEW_CONN_ID, 0,
                                                      placeholder_data,
                                                      sizeof(placeholder_data),
                                                      cfq_free_cb_, NULL))
@@ -329,7 +329,8 @@ static int test_fifd(int idx)
         || !TEST_ptr(info.ackm = ossl_ackm_new(fake_now, NULL,
                                                &info.statm,
                                                &ossl_cc_dummy_method,
-                                               info.ccdata))
+                                               info.ccdata,
+                                               /* is_server */0))
         || !TEST_true(ossl_ackm_on_handshake_confirmed(info.ackm))
         || !TEST_ptr(info.cfq = ossl_quic_cfq_new())
         || !TEST_ptr(info.txpim = ossl_quic_txpim_new())
@@ -338,7 +339,8 @@ static int test_fifd(int idx)
                                           get_sstream_by_id, NULL,
                                           regen_frame, NULL,
                                           confirm_frame, NULL,
-                                          sstream_updated, NULL)))
+                                          sstream_updated, NULL,
+                                          NULL, NULL)))
         goto err;
 
     for (i = 0; i < OSSL_NELEM(info.sstream); ++i)

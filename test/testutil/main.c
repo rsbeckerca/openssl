@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -15,10 +15,14 @@
 int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
+    int setup_res;
+    int gi_ret;
+
+    gi_ret = global_init();
 
     test_open_streams();
 
-    if (!global_init()) {
+    if (!gi_ret) {
         test_printf_stderr("Global init failed - aborting\n");
         return ret;
     }
@@ -26,11 +30,11 @@ int main(int argc, char *argv[])
     if (!setup_test_framework(argc, argv))
         goto end;
 
-    if (setup_tests()) {
+    if ((setup_res = setup_tests()) > 0) {
         ret = run_tests(argv[0]);
         cleanup_tests();
         opt_check_usage();
-    } else {
+    } else if (setup_res == 0) {
         opt_help(test_get_options());
     }
 end:

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -10,10 +10,8 @@
 #ifndef OSSL_APPS_H
 # define OSSL_APPS_H
 
-# include "internal/e_os.h" /* struct timeval for DTLS */
 # include "internal/common.h" /* for HAS_PREFIX */
 # include "internal/nelem.h"
-# include "internal/sockets.h" /* for openssl_fdset() */
 # include <assert.h>
 
 # include <stdarg.h>
@@ -65,6 +63,7 @@ BIO *dup_bio_err(int format);
 BIO *bio_open_owner(const char *filename, int format, int private);
 BIO *bio_open_default(const char *filename, char mode, int format);
 BIO *bio_open_default_quiet(const char *filename, char mode, int format);
+int mem_bio_to_file(BIO *in, const char *filename, int format, int private);
 char *app_conf_try_string(const CONF *cnf, const char *group, const char *name);
 int app_conf_try_number(const CONF *conf, const char *group, const char *name,
                         long *result);
@@ -82,8 +81,12 @@ int has_stdin_waiting(void);
 # endif
 
 void corrupt_signature(const ASN1_STRING *signature);
+
+/* Helpers for setting X509v3 certificate fields notBefore and notAfter */
+int check_cert_time_string(const char *time, const char *desc);
 int set_cert_times(X509 *x, const char *startdate, const char *enddate,
-                   int days);
+                   int days, int strict_compare_times);
+
 int set_crl_lastupdate(X509_CRL *crl, const char *lastupdate);
 int set_crl_nextupdate(X509_CRL *crl, const char *nextupdate,
                        long days, long hours, long secs);
@@ -100,7 +103,6 @@ int wrap_password_callback(char *buf, int bufsiz, int verify, void *cb_data);
 /* progress callback for dsaparam, dhparam, req, genpkey, etc. */
 int progress_cb(EVP_PKEY_CTX *ctx);
 
-int chopup_args(ARGS *arg, char *buf);
 void dump_cert_text(BIO *out, X509 *x);
 void print_name(BIO *out, const char *title, const X509_NAME *nm);
 void print_bignum_var(BIO *, const BIGNUM *, const char *,
@@ -137,6 +139,8 @@ EVP_PKEY *load_keyparams_suppress(const char *uri, int format, int maybe_stdin,
                                   const char *keytype, const char *desc,
                                   int suppress_decode_errors);
 char *next_item(char *opt); /* in list separated by comma and/or space */
+char *process_additional_mac_key_arguments(const char *arg);
+char *get_str_from_file(const char *filename);
 int load_cert_certs(const char *uri,
                     X509 **pcert, STACK_OF(X509) **pcerts,
                     int exclude_http, const char *pass, const char *desc,
@@ -181,7 +185,9 @@ int init_engine(ENGINE *e);
 int finish_engine(ENGINE *e);
 char *make_engine_uri(ENGINE *e, const char *key_id, const char *desc);
 
+# ifndef OPENSSL_NO_DEPRECATED_3_6
 int get_legacy_pkey_id(OSSL_LIB_CTX *libctx, const char *algname, ENGINE *e);
+# endif
 const EVP_MD *get_digest_from_engine(const char *name);
 const EVP_CIPHER *get_cipher_from_engine(const char *name);
 
@@ -225,7 +231,26 @@ typedef struct ca_db_st {
 extern int do_updatedb(CA_DB *db, time_t *now);
 
 void app_bail_out(char *fmt, ...);
+/**
+ * OPENSSL_malloc() wrapper that bails out with a meaningful message on failure.
+ *
+ * @param sz   Number of bytes to allocate.
+ * @param what Description of the object being allocated.
+ * @return On success, returns a pointer to the newly allocated memory.
+ *         on failure, calls app_bail_out() to terminate the program.
+ */
 void *app_malloc(size_t sz, const char *what);
+/**
+ * OPENSSL_malloc_array() wrapper that bails out with a meaningful message
+ * on failure.
+ *
+ * @param n    Number of objects to allocate memory for.
+ * @param sz   Size in bytes of each object to be allocated.
+ * @param what Description of the array being allocated.
+ * @return On success, returns a pointer to the newly allocated memory;
+ *         on failure, calls app_bail_out() to terminate the program.
+ */
+void *app_malloc_array(size_t n, size_t sz, const char *what);
 
 /* load_serial, save_serial, and rotate_serial are also used for CRL numbers */
 BIGNUM *load_serial(const char *serialfile, int *exists, int create,

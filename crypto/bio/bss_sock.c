@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -215,6 +215,20 @@ static long sock_ctrl(BIO *b, int cmd, long num, void *ptr)
     case BIO_CTRL_FLUSH:
         ret = 1;
         break;
+    case BIO_CTRL_GET_RPOLL_DESCRIPTOR:
+    case BIO_CTRL_GET_WPOLL_DESCRIPTOR:
+        {
+            BIO_POLL_DESCRIPTOR *pd = ptr;
+
+            if (!b->init) {
+                ret = 0;
+                break;
+            }
+
+            pd->type        = BIO_POLL_DESCRIPTOR_TYPE_SOCK_FD;
+            pd->value.fd    = b->num;
+        }
+        break;
 # ifndef OPENSSL_NO_KTLS
     case BIO_CTRL_SET_KTLS:
         crypto_info = (ktls_crypto_info_t *)ptr;
@@ -272,10 +286,12 @@ static long sock_ctrl(BIO *b, int cmd, long num, void *ptr)
 
 static int sock_puts(BIO *bp, const char *str)
 {
-    int n, ret;
+    int ret;
+    size_t n = strlen(str);
 
-    n = strlen(str);
-    ret = sock_write(bp, str, n);
+    if (n > INT_MAX)
+        return -1;
+    ret = sock_write(bp, str, (int)n);
     return ret;
 }
 

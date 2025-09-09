@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2012-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -13,6 +13,8 @@
 
 /* Packet trace support for OpenSSL */
 #include "internal/nelem.h"
+#include "internal/ssl_unwrap.h"
+#include "internal/quic_trace.h"
 
 typedef struct {
     int num;
@@ -446,9 +448,10 @@ static const ssl_trace_tbl ssl_ciphers_tbl[] = {
     {0xFEFF, "SSL_RSA_FIPS_WITH_3DES_EDE_CBC_SHA"},
     {0xFF85, "LEGACY-GOST2012-GOST8912-GOST8912"},
     {0xFF87, "GOST2012-NULL-GOST12"},
+    {0xC0B4, "TLS_SHA256_SHA256"},
+    {0xC0B5, "TLS_SHA384_SHA384"},
     {0xC100, "GOST2012-KUZNYECHIK-KUZNYECHIKOMAC"},
     {0xC101, "GOST2012-MAGMA-MAGMAOMAC"},
-    {0xC102, "GOST2012-GOST8912-IANA"},
 };
 
 /* Compression methods */
@@ -545,6 +548,10 @@ static const ssl_trace_tbl ssl_groups_tbl[] = {
     {258, "ffdhe4096"},
     {259, "ffdhe6144"},
     {260, "ffdhe8192"},
+    {4587, "SecP256r1MLKEM768"},
+    {4588, "X25519MLKEM768"},
+    {25497, "X25519Kyber768Draft00"},
+    {25498, "SecP256r1Kyber768Draft00"},
     {0xFF01, "arbitrary_explicit_prime_curves"},
     {0xFF02, "arbitrary_explicit_char2_curves"}
 };
@@ -564,37 +571,45 @@ static const ssl_trace_tbl ssl_mfl_tbl[] = {
 };
 
 static const ssl_trace_tbl ssl_sigalg_tbl[] = {
-    {TLSEXT_SIGALG_ecdsa_secp256r1_sha256, "ecdsa_secp256r1_sha256"},
-    {TLSEXT_SIGALG_ecdsa_secp384r1_sha384, "ecdsa_secp384r1_sha384"},
-    {TLSEXT_SIGALG_ecdsa_secp521r1_sha512, "ecdsa_secp521r1_sha512"},
-    {TLSEXT_SIGALG_ecdsa_sha224, "ecdsa_sha224"},
-    {TLSEXT_SIGALG_ed25519, "ed25519"},
-    {TLSEXT_SIGALG_ed448, "ed448"},
-    {TLSEXT_SIGALG_ecdsa_sha1, "ecdsa_sha1"},
-    {TLSEXT_SIGALG_rsa_pss_rsae_sha256, "rsa_pss_rsae_sha256"},
-    {TLSEXT_SIGALG_rsa_pss_rsae_sha384, "rsa_pss_rsae_sha384"},
-    {TLSEXT_SIGALG_rsa_pss_rsae_sha512, "rsa_pss_rsae_sha512"},
-    {TLSEXT_SIGALG_rsa_pss_pss_sha256, "rsa_pss_pss_sha256"},
-    {TLSEXT_SIGALG_rsa_pss_pss_sha384, "rsa_pss_pss_sha384"},
-    {TLSEXT_SIGALG_rsa_pss_pss_sha512, "rsa_pss_pss_sha512"},
-    {TLSEXT_SIGALG_rsa_pkcs1_sha256, "rsa_pkcs1_sha256"},
-    {TLSEXT_SIGALG_rsa_pkcs1_sha384, "rsa_pkcs1_sha384"},
-    {TLSEXT_SIGALG_rsa_pkcs1_sha512, "rsa_pkcs1_sha512"},
-    {TLSEXT_SIGALG_rsa_pkcs1_sha224, "rsa_pkcs1_sha224"},
-    {TLSEXT_SIGALG_rsa_pkcs1_sha1, "rsa_pkcs1_sha1"},
-    {TLSEXT_SIGALG_dsa_sha256, "dsa_sha256"},
-    {TLSEXT_SIGALG_dsa_sha384, "dsa_sha384"},
-    {TLSEXT_SIGALG_dsa_sha512, "dsa_sha512"},
-    {TLSEXT_SIGALG_dsa_sha224, "dsa_sha224"},
-    {TLSEXT_SIGALG_dsa_sha1, "dsa_sha1"},
-    {TLSEXT_SIGALG_gostr34102012_256_intrinsic, "gost2012_256"},
-    {TLSEXT_SIGALG_gostr34102012_512_intrinsic, "gost2012_512"},
-    {TLSEXT_SIGALG_gostr34102012_256_gostr34112012_256, "gost2012_256"},
-    {TLSEXT_SIGALG_gostr34102012_512_gostr34112012_512, "gost2012_512"},
-    {TLSEXT_SIGALG_gostr34102001_gostr3411, "gost2001_gost94"},
-    {TLSEXT_SIGALG_ecdsa_brainpoolP256r1_sha256, "ecdsa_brainpoolP256r1_sha256"},
-    {TLSEXT_SIGALG_ecdsa_brainpoolP384r1_sha384, "ecdsa_brainpoolP384r1_sha384"},
-    {TLSEXT_SIGALG_ecdsa_brainpoolP512r1_sha512, "ecdsa_brainpoolP512r1_sha512"},
+    {TLSEXT_SIGALG_ecdsa_secp256r1_sha256, TLSEXT_SIGALG_ecdsa_secp256r1_sha256_name},
+    {TLSEXT_SIGALG_ecdsa_secp384r1_sha384, TLSEXT_SIGALG_ecdsa_secp384r1_sha384_name},
+    {TLSEXT_SIGALG_ecdsa_secp521r1_sha512,TLSEXT_SIGALG_ecdsa_secp521r1_sha512_name},
+    {TLSEXT_SIGALG_ecdsa_sha224, TLSEXT_SIGALG_ecdsa_sha224_name},
+    {TLSEXT_SIGALG_ed25519, TLSEXT_SIGALG_ed25519_name},
+    {TLSEXT_SIGALG_ed448, TLSEXT_SIGALG_ed448_name},
+    {TLSEXT_SIGALG_ecdsa_sha1, TLSEXT_SIGALG_ecdsa_sha1_name},
+    {TLSEXT_SIGALG_rsa_pss_rsae_sha256, TLSEXT_SIGALG_rsa_pss_rsae_sha256_name},
+    {TLSEXT_SIGALG_rsa_pss_rsae_sha384, TLSEXT_SIGALG_rsa_pss_rsae_sha384_name},
+    {TLSEXT_SIGALG_rsa_pss_rsae_sha512, TLSEXT_SIGALG_rsa_pss_rsae_sha512_name},
+    {TLSEXT_SIGALG_rsa_pss_pss_sha256, TLSEXT_SIGALG_rsa_pss_pss_sha256_name},
+    {TLSEXT_SIGALG_rsa_pss_pss_sha384, TLSEXT_SIGALG_rsa_pss_pss_sha384_name},
+    {TLSEXT_SIGALG_rsa_pss_pss_sha512, TLSEXT_SIGALG_rsa_pss_pss_sha512_name},
+    {TLSEXT_SIGALG_rsa_pkcs1_sha256, TLSEXT_SIGALG_rsa_pkcs1_sha256_name},
+    {TLSEXT_SIGALG_rsa_pkcs1_sha384, TLSEXT_SIGALG_rsa_pkcs1_sha384_name},
+    {TLSEXT_SIGALG_rsa_pkcs1_sha512, TLSEXT_SIGALG_rsa_pkcs1_sha512_name},
+    {TLSEXT_SIGALG_rsa_pkcs1_sha224, TLSEXT_SIGALG_rsa_pkcs1_sha224_name},
+    {TLSEXT_SIGALG_rsa_pkcs1_sha1, TLSEXT_SIGALG_rsa_pkcs1_sha1_name},
+    {TLSEXT_SIGALG_dsa_sha256, TLSEXT_SIGALG_dsa_sha256_name},
+    {TLSEXT_SIGALG_dsa_sha384, TLSEXT_SIGALG_dsa_sha384_name},
+    {TLSEXT_SIGALG_dsa_sha512, TLSEXT_SIGALG_dsa_sha512_name},
+    {TLSEXT_SIGALG_dsa_sha224, TLSEXT_SIGALG_dsa_sha224_name},
+    {TLSEXT_SIGALG_dsa_sha1, TLSEXT_SIGALG_dsa_sha1_name},
+    {TLSEXT_SIGALG_gostr34102012_256_intrinsic, TLSEXT_SIGALG_gostr34102012_256_intrinsic_name},
+    {TLSEXT_SIGALG_gostr34102012_512_intrinsic, TLSEXT_SIGALG_gostr34102012_512_intrinsic_name},
+    {TLSEXT_SIGALG_gostr34102012_256_gostr34112012_256, TLSEXT_SIGALG_gostr34102012_256_gostr34112012_256_name},
+    {TLSEXT_SIGALG_gostr34102012_512_gostr34112012_512, TLSEXT_SIGALG_gostr34102012_512_gostr34112012_512_name},
+    {TLSEXT_SIGALG_gostr34102001_gostr3411, TLSEXT_SIGALG_gostr34102001_gostr3411_name},
+    {TLSEXT_SIGALG_ecdsa_brainpoolP256r1_sha256, TLSEXT_SIGALG_ecdsa_brainpoolP256r1_sha256_name},
+    {TLSEXT_SIGALG_ecdsa_brainpoolP384r1_sha384, TLSEXT_SIGALG_ecdsa_brainpoolP384r1_sha384_name},
+    {TLSEXT_SIGALG_ecdsa_brainpoolP512r1_sha512, TLSEXT_SIGALG_ecdsa_brainpoolP512r1_sha512_name},
+    /*
+     * Well known groups that we happen to know about, but only come from
+     * provider capability declarations (hence no macros for the
+     * codepoints/names)
+     */
+    {0x0904, "mldsa44"},
+    {0x0905, "mldsa65"},
+    {0x0906, "mldsa87"}
 };
 
 static const ssl_trace_tbl ssl_ctype_tbl[] = {
@@ -787,7 +802,7 @@ static int ssl_print_extension(BIO *bio, int indent, int server,
             if (plen + 1 > xlen)
                 return 0;
             BIO_indent(bio, indent + 2, 80);
-            BIO_write(bio, ext, plen);
+            BIO_write(bio, ext, (int)plen);
             BIO_puts(bio, "\n");
             ext += plen;
             xlen -= plen + 1;
@@ -939,7 +954,7 @@ static int ssl_print_extension(BIO *bio, int indent, int server,
         return ssl_trace_list(bio, indent + 2, ext + 1, xlen, 1, ssl_cert_type_tbl);
 
     default:
-        BIO_dump_indent(bio, (const char *)ext, extlen, indent + 2);
+        BIO_dump_indent(bio, (const char *)ext, (int)extlen, indent + 2);
     }
     return 1;
 }
@@ -981,7 +996,7 @@ static int ssl_print_extensions(BIO *bio, int indent, int server,
         if (extslen < extlen + 4) {
             BIO_printf(bio, "extensions, extype = %d, extlen = %d\n", extype,
                        (int)extlen);
-            BIO_dump_indent(bio, (const char *)msg, extslen, indent + 2);
+            BIO_dump_indent(bio, (const char *)msg, (int)extslen, indent + 2);
             return 0;
         }
         msg += 4;
@@ -1286,7 +1301,7 @@ static int ssl_print_certificate(BIO *bio, const SSL_CONNECTION *sc, int indent,
     BIO_indent(bio, indent, 80);
     BIO_printf(bio, "ASN.1Cert, length=%d", (int)clen);
     x = X509_new_ex(ctx->libctx, ctx->propq);
-    if (x != NULL && d2i_X509(&x, &q, clen) == NULL) {
+    if (x != NULL && d2i_X509(&x, &q, (long)clen) == NULL) {
         X509_free(x);
         x = NULL;
     }
@@ -1328,7 +1343,7 @@ static int ssl_print_raw_public_key(BIO *bio, const SSL *ssl, int server,
     BIO_indent(bio, indent, 80);
     BIO_printf(bio, "raw_public_key, length=%d\n", (int)clen);
 
-    pkey = d2i_PUBKEY_ex(NULL, &msg, clen, ssl->ctx->libctx, ssl->ctx->propq);
+    pkey = d2i_PUBKEY_ex(NULL, &msg, (long)clen, ssl->ctx->libctx, ssl->ctx->propq);
     if (pkey == NULL)
         return 0;
     EVP_PKEY_print_public(bio, pkey, indent + 2, NULL);
@@ -1413,7 +1428,7 @@ static int ssl_print_compressed_certificates(BIO *bio, const SSL_CONNECTION *sc,
     else
         BIO_printf(bio, "Compressed length=%d, Ratio=unknown\n", (int)clen);
 
-    BIO_dump_indent(bio, (const char *)msg, clen, indent);
+    BIO_dump_indent(bio, (const char *)msg, (int)clen, indent);
 
 #ifndef OPENSSL_NO_COMP_ALG
     if (!ossl_comp_has_alg(alg))
@@ -1438,7 +1453,8 @@ static int ssl_print_compressed_certificates(BIO *bio, const SSL_CONNECTION *sc,
     }
 
     if ((comp = COMP_CTX_new(method)) == NULL
-            || COMP_expand_block(comp, ucdata, uclen, (unsigned char*)msg, clen) != (int)uclen)
+            || COMP_expand_block(comp, ucdata, (int)uclen,
+                                 (unsigned char*)msg, (int)clen) != (int)uclen)
         goto err;
 
     ret = ssl_print_certificates(bio, sc, server, indent, ucdata, uclen);
@@ -1519,7 +1535,7 @@ static int ssl_print_cert_request(BIO *bio, int indent, const SSL_CONNECTION *sc
         BIO_indent(bio, indent + 2, 80);
         BIO_printf(bio, "DistinguishedName (len=%d): ", (int)dlen);
         p = msg;
-        nm = d2i_X509_NAME(NULL, &p, dlen);
+        nm = d2i_X509_NAME(NULL, &p, (long)dlen);
         if (!nm) {
             BIO_puts(bio, "<UNPARSEABLE DN>\n");
         } else {
@@ -1667,6 +1683,7 @@ static int ssl_print_handshake(BIO *bio, const SSL_CONNECTION *sc, int server,
         ssl_print_hex(bio, indent + 2, "verify_data", msg, msglen);
         break;
 
+    case SSL3_MT_END_OF_EARLY_DATA:
     case SSL3_MT_SERVER_DONE:
         if (msglen != 0)
             ssl_print_hex(bio, indent + 2, "unexpected value", msg, msglen);
@@ -1696,7 +1713,7 @@ static int ssl_print_handshake(BIO *bio, const SSL_CONNECTION *sc, int server,
     default:
         BIO_indent(bio, indent + 2, 80);
         BIO_puts(bio, "Unsupported, hex dump follows:\n");
-        BIO_dump_indent(bio, (const char *)msg, msglen, indent + 4);
+        BIO_dump_indent(bio, (const char *)msg, (int)msglen, indent + 4);
     }
     return 1;
 }

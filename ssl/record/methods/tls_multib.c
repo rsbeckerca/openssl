@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -20,7 +20,7 @@
 # define EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK 0
 #endif
 
-static int tls_is_multiblock_capable(OSSL_RECORD_LAYER *rl, int type,
+static int tls_is_multiblock_capable(OSSL_RECORD_LAYER *rl, uint8_t type,
                                      size_t len, size_t fraglen)
 {
 #if !defined(OPENSSL_NO_MULTIBLOCK) && EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK
@@ -38,7 +38,7 @@ static int tls_is_multiblock_capable(OSSL_RECORD_LAYER *rl, int type,
     return 0;
 }
 
-size_t tls_get_max_records_multiblock(OSSL_RECORD_LAYER *rl, int type,
+size_t tls_get_max_records_multiblock(OSSL_RECORD_LAYER *rl, uint8_t type,
                                       size_t len, size_t maxfrag,
                                       size_t *preffrag)
 {
@@ -118,7 +118,7 @@ static int tls_write_records_multiblock_int(OSSL_RECORD_LAYER *rl,
     }
     wb = &rl->wbuf[0];
 
-    mb_param.interleave = numtempl;
+    mb_param.interleave = (unsigned int)numtempl;
     memcpy(aad, rl->sequence, 8);
     aad[8] = templates[0].type;
     aad[9] = (unsigned char)(templates[0].version >> 8);

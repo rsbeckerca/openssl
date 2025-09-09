@@ -63,7 +63,7 @@ depend on the error stack contents.
 Intermittent errors are handled within the library and cleared from the
 error stack before returning to the user.
 
-Permanent errors happenning within the assist thread, within SSL_tick()
+Permanent errors happening within the assist thread, within SSL_tick()
 processing, or when calling SSL_read()/SSL_write() on a stream need to be
 replicated for SSL_read()/SSL_write() calls on other streams.
 
@@ -75,7 +75,7 @@ for errors happening in the internal assistance thread. When a permanent error
 is detected the error stack entries are moved to this error stack in
 QUIC_CHANNEL.
 
-When returning to an application from a SSL_read()/SSL_write() call with
+When returning to an application from an SSL_read()/SSL_write() call with
 a permanent connection error, entries from the QUIC_CHANNEL error stack
 are copied to the thread local error stack. They are always kept on
 the QUIC_CHANNEL error stack as well for possible further calls from

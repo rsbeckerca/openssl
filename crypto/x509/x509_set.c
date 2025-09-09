@@ -1,11 +1,16 @@
 /*
- * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+
+/*
+ * because of EVP_PKEY_asn1_find deprecation
+ */
+#include "internal/deprecated.h"
 
 #include <stdio.h>
 #include "internal/cryptlib.h"
@@ -116,10 +121,10 @@ int X509_up_ref(X509 *x)
 {
     int i;
 
-    if (CRYPTO_UP_REF(&x->references, &i, x->lock) <= 0)
+    if (CRYPTO_UP_REF(&x->references, &i) <= 0)
         return 0;
 
-    REF_PRINT_COUNT("X509", x);
+    REF_PRINT_COUNT("X509", i, x);
     REF_ASSERT_ISNT(i < 2);
     return i > 1;
 }
@@ -212,7 +217,7 @@ int X509_get_signature_info(X509 *x, int *mdnid, int *pknid, int *secbits,
 static int x509_sig_info_init(X509_SIG_INFO *siginf, const X509_ALGOR *alg,
                               const ASN1_STRING *sig, const EVP_PKEY *pubkey)
 {
-    int pknid, mdnid;
+    int pknid, mdnid, md_size;
     const EVP_MD *md;
     const EVP_PKEY_ASN1_METHOD *ameth;
 
@@ -279,7 +284,10 @@ static int x509_sig_info_init(X509_SIG_INFO *siginf, const X509_ALGOR *alg,
             ERR_raise(ERR_LIB_X509, X509_R_ERROR_GETTING_MD_BY_NID);
             return 0;
         }
-        siginf->secbits = EVP_MD_get_size(md) * 4;
+        md_size = EVP_MD_get_size(md);
+        if (md_size <= 0)
+            return 0;
+        siginf->secbits = md_size * 4;
         break;
     }
     switch (mdnid) {

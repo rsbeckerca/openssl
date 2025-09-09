@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -14,7 +14,7 @@
 #include "internal/thread_arch.h"
 #include "internal/quic_thread_assist.h"
 
-#if !defined(OPENSSL_NO_QUIC) && defined(OPENSSL_THREADS)
+#if !defined(OPENSSL_NO_QUIC_THREAD_ASSIST)
 
 /* Main loop for the QUIC assist thread. */
 static unsigned int assist_thread_main(void *arg)
@@ -22,17 +22,25 @@ static unsigned int assist_thread_main(void *arg)
     QUIC_THREAD_ASSIST *qta = arg;
     CRYPTO_MUTEX *m = ossl_quic_channel_get_mutex(qta->ch);
     QUIC_REACTOR *rtor;
+    QUIC_ENGINE *eng = ossl_quic_channel_get0_engine(qta->ch);
 
     ossl_crypto_mutex_lock(m);
 
     rtor = ossl_quic_channel_get_reactor(qta->ch);
 
     for (;;) {
+        OSSL_TIME deadline;
+
         if (qta->teardown)
             break;
 
-        ossl_crypto_condvar_wait_timeout(qta->cv, m,
-                                         ossl_quic_reactor_get_tick_deadline(rtor));
+        deadline = ossl_quic_reactor_get_tick_deadline(rtor);
+        /*
+         * ossl_crypto_condvar_wait_timeout needs to use real time for the
+         * deadline
+         */
+        deadline = ossl_quic_engine_make_real_time(eng, deadline);
+        ossl_crypto_condvar_wait_timeout(qta->cv, m, deadline);
 
         /*
          * We have now been woken up. This can be for one of the following
@@ -74,7 +82,7 @@ int ossl_quic_thread_assist_init_start(QUIC_THREAD_ASSIST *qta,
     qta->t = ossl_crypto_thread_native_start(assist_thread_main,
                                              qta, /*joinable=*/1);
     if (qta->t == NULL) {
-        ossl_crypto_condvar_free(qta->cv);
+        ossl_crypto_condvar_free(&qta->cv);
         return 0;
     }
 

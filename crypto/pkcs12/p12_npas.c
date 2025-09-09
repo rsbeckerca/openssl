@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2020 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -62,7 +62,8 @@ static int newpass_p12(PKCS12 *p12, const char *oldpass, const char *newpass)
     STACK_OF(PKCS7) *asafes = NULL, *newsafes = NULL;
     STACK_OF(PKCS12_SAFEBAG) *bags = NULL;
     int i, bagnid, pbe_nid = 0, pbe_iter = 0, pbe_saltlen = 0, cipherid = NID_undef;
-    PKCS7 *p7, *p7new;
+    PKCS7 *p7;
+    PKCS7 *p7new = NULL;
     ASN1_OCTET_STRING *p12_data_tmp = NULL, *macoct = NULL;
     unsigned char mac[EVP_MAX_MD_SIZE];
     unsigned int maclen;
@@ -80,8 +81,9 @@ static int newpass_p12(PKCS12 *p12, const char *oldpass, const char *newpass)
             bags = PKCS12_unpack_p7data(p7);
         } else if (bagnid == NID_pkcs7_encrypted) {
             bags = PKCS12_unpack_p7encdata(p7, oldpass, -1);
-            if (!alg_get(p7->d.encrypted->enc_data->algorithm,
-                         &pbe_nid, &pbe_iter, &pbe_saltlen, &cipherid))
+            if (p7->d.encrypted == NULL
+                    || !alg_get(p7->d.encrypted->enc_data->algorithm,
+                                &pbe_nid, &pbe_iter, &pbe_saltlen, &cipherid))
                 goto err;
         } else {
             continue;
@@ -98,8 +100,10 @@ static int newpass_p12(PKCS12 *p12, const char *oldpass, const char *newpass)
             p7new = PKCS12_pack_p7encdata_ex(pbe_nid, newpass, -1, NULL,
                                              pbe_saltlen, pbe_iter, bags,
                                              p7->ctx.libctx, p7->ctx.propq);
-        if (p7new == NULL || !sk_PKCS7_push(newsafes, p7new))
+        if (p7new == NULL || !sk_PKCS7_push(newsafes, p7new)) {
+            PKCS7_free(p7new);
             goto err;
+        }
         sk_PKCS12_SAFEBAG_pop_free(bags, PKCS12_SAFEBAG_free);
         bags = NULL;
     }
@@ -211,8 +215,7 @@ static int alg_get(const X509_ALGOR *alg, int *pnid, int *piter,
         if (pbe2 == NULL)
             goto done;
 
-        X509_ALGOR_get0(&aoid, &aparamtype, &aparam, pbe2->keyfunc);
-        pbenid = OBJ_obj2nid(aoid);
+        X509_ALGOR_get0(NULL, &aparamtype, &aparam, pbe2->keyfunc);
         X509_ALGOR_get0(&aoid, NULL, NULL, pbe2->encryption);
         encnid = OBJ_obj2nid(aoid);
 

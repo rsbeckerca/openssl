@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 #include <string.h>
 #include <openssl/bn.h>
 #include <openssl/core.h>
+#include <openssl/err.h>
 #include <openssl/params.h>
 #include "internal/numbers.h"
 #include "internal/nelem.h"
@@ -138,7 +139,7 @@ static int raw_set_params(void *vobj, const OSSL_PARAM *params)
         } else if (strcmp(params->key, "p3") == 0) {
             BN_free(obj->p3);
             if (!TEST_ptr(obj->p3 = BN_native2bn(params->data,
-                                                 params->data_size, NULL)))
+                                                 (int)params->data_size, NULL)))
                 return 0;
         } else if (strcmp(params->key, "p4") == 0) {
             OPENSSL_free(obj->p4);
@@ -182,7 +183,7 @@ static int raw_get_params(void *vobj, OSSL_PARAM *params)
             params->return_size = BN_num_bytes(obj->p3);
             if (!TEST_size_t_ge(params->data_size, params->return_size))
                 return 0;
-            BN_bn2nativepad(obj->p3, params->data, params->return_size);
+            BN_bn2nativepad(obj->p3, params->data, (int)params->return_size);
         } else if (strcmp(params->key, "p4") == 0) {
             params->return_size = strlen(obj->p4);
             if (!TEST_size_t_gt(params->data_size, params->return_size))
@@ -459,7 +460,7 @@ static int test_case_variant(OSSL_PARAM *params, const struct provider_dispatch_
         || !TEST_int_eq(app_p1, p1_init)        /* "provider" value */
         || !TEST_double_eq(app_p2, app_p2_init) /* Should remain untouched */
         || !TEST_ptr(p = OSSL_PARAM_locate(params, "p3"))
-        || !TEST_ptr(BN_native2bn(bignumbin, p->return_size, app_p3))
+        || !TEST_ptr(BN_native2bn(bignumbin, (int)p->return_size, app_p3))
         || !TEST_BN_eq(app_p3, verify_p3)       /* "provider" value */
         || !TEST_str_eq(app_p4, p4_init)        /* "provider" value */
         || !TEST_ptr(p = OSSL_PARAM_locate(params, "p5"))
@@ -510,7 +511,7 @@ static int test_case_variant(OSSL_PARAM *params, const struct provider_dispatch_
         || !TEST_int_eq(app_p1, app_p1_init)    /* app value */
         || !TEST_double_eq(app_p2, app_p2_init) /* Should remain untouched */
         || !TEST_ptr(p = OSSL_PARAM_locate(params, "p3"))
-        || !TEST_ptr(BN_native2bn(bignumbin, p->return_size, app_p3))
+        || !TEST_ptr(BN_native2bn(bignumbin, (int)p->return_size, app_p3))
         || !TEST_BN_eq(app_p3, verify_p3)       /* app value */
         || !TEST_str_eq(app_p4, app_p4_init)    /* app value */
         || !TEST_ptr(p = OSSL_PARAM_locate(params, "p5"))
@@ -558,6 +559,7 @@ static const OSSL_PARAM params_from_text[] = {
     /* Arbitrary size buffer.  Make sure the result fits in a long */
     OSSL_PARAM_DEFN("num", OSSL_PARAM_INTEGER, NULL, 0),
     OSSL_PARAM_DEFN("unum", OSSL_PARAM_UNSIGNED_INTEGER, NULL, 0),
+    OSSL_PARAM_DEFN("octets", OSSL_PARAM_OCTET_STRING, NULL, 0),
     OSSL_PARAM_END,
 };
 
@@ -655,14 +657,56 @@ static int check_int_from_text(const struct int_from_text_test_st a)
     return a.expected_res;
 }
 
+static int check_octetstr_from_hexstr(void)
+{
+    OSSL_PARAM param;
+    static const char *values[] = { "", "F", "FF", "FFF", "FFFF", NULL };
+    int i;
+    int errcnt = 0;
+
+    /* Test odd vs even number of hex digits */
+    for (i = 0; values[i] != NULL; i++) {
+        int expected = (strlen(values[i]) % 2) != 1;
+        int result;
+
+        ERR_clear_error();
+        memset(&param, 0, sizeof(param));
+        if (expected)
+            result =
+                TEST_true(OSSL_PARAM_allocate_from_text(&param,
+                                                        params_from_text,
+                                                        "hexoctets", values[i], 0,
+                                                        NULL));
+        else
+            result =
+                TEST_false(OSSL_PARAM_allocate_from_text(&param,
+                                                         params_from_text,
+                                                         "hexoctets", values[i], 0,
+                                                         NULL));
+        if (!result) {
+            TEST_error("unexpected OSSL_PARAM_allocate_from_text() %s for 'octets' \"%s\"",
+                       (expected ? "failure" : "success"), values[i]);
+            errcnt++;
+        }
+        OPENSSL_free(param.data);
+    }
+    return errcnt == 0;
+}
+
 static int test_allocate_from_text(int i)
 {
     return check_int_from_text(int_from_text_test_cases[i]);
+}
+
+static int test_more_allocate_from_text(void)
+{
+    return check_octetstr_from_hexstr();
 }
 
 int setup_tests(void)
 {
     ADD_ALL_TESTS(test_case, OSSL_NELEM(test_cases));
     ADD_ALL_TESTS(test_allocate_from_text, OSSL_NELEM(int_from_text_test_cases));
+    ADD_TEST(test_more_allocate_from_text);
     return 1;
 }

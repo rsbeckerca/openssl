@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -119,6 +119,27 @@ static void unload_providers(OSSL_LIB_CTX **libctx, OSSL_PROVIDER *prov[])
         OPENSSL_thread_stop_ex(*libctx);
         OSSL_LIB_CTX_free(*libctx);
     }
+}
+
+static int test_legacy_provider_unloaded(void)
+{
+    OSSL_LIB_CTX *ctx = NULL;
+    int rc = 0;
+
+    ctx = OSSL_LIB_CTX_new();
+    if (!TEST_ptr(ctx))
+        goto err;
+
+    if (!TEST_true(OSSL_LIB_CTX_load_config(ctx, config_file)))
+        goto err;
+
+    if (!TEST_int_eq(OSSL_PROVIDER_available(ctx, "legacy"), 0))
+        goto err;
+
+    rc = 1;
+err:
+    OSSL_LIB_CTX_free(ctx);
+    return rc;
 }
 
 static X509_ALGOR *make_algor(int nid)
@@ -249,7 +270,7 @@ static int encrypt_decrypt(const EVP_CIPHER *cipher, const unsigned char *msg,
     memset(key, 0, sizeof(key));
     if (!TEST_ptr(ctx = EVP_CIPHER_CTX_new())
             || !TEST_true(EVP_CipherInit_ex(ctx, cipher, NULL, key, NULL, 1))
-            || !TEST_true(EVP_CipherUpdate(ctx, ct, &ctlen, msg, len))
+            || !TEST_true(EVP_CipherUpdate(ctx, ct, &ctlen, msg, (int)len))
             || !TEST_true(EVP_CipherFinal_ex(ctx, ct, &ctlen))
             || !TEST_true(EVP_CipherInit_ex(ctx, cipher, NULL, key, NULL, 0))
             || !TEST_true(EVP_CipherUpdate(ctx, pt, &ptlen, ct, ctlen))
@@ -379,6 +400,7 @@ int setup_tests(void)
             return 0;
         }
     }
+    ADD_TEST(test_legacy_provider_unloaded);
     if (strcmp(alg, "digest") == 0) {
         ADD_TEST(test_implicit_EVP_MD_fetch);
         ADD_TEST(test_explicit_EVP_MD_fetch_by_name);

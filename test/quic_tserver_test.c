@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -73,8 +73,7 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
     int s_begin_write = 0;
     OSSL_TIME start_time;
     unsigned char alpn[] = { 8, 'o', 's', 's', 'l', 't', 'e', 's', 't' };
-    OSSL_TIME (*now_cb)(void *arg) = use_fake_time ? fake_now : real_now;
-    size_t limit_ms = 1000;
+    size_t limit_ms = 10000;
 
 #if defined(OPENSSL_NO_QUIC_THREAD_ASSIST)
     if (use_thread_assist) {
@@ -119,6 +118,8 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
 
     tserver_args.net_rbio = s_net_bio;
     tserver_args.net_wbio = s_net_bio;
+    tserver_args.alpn = NULL;
+    tserver_args.ctx = NULL;
     if (use_fake_time)
         tserver_args.now_cb = fake_now;
 
@@ -165,7 +166,8 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
         goto err;
 
     if (use_fake_time)
-        ossl_quic_conn_set_override_now_cb(c_ssl, fake_now, NULL);
+        if (!TEST_true(ossl_quic_set_override_now_cb(c_ssl, fake_now, NULL)))
+            goto err;
 
     /* 0 is a success for SSL_set_alpn_protos() */
     if (!TEST_false(SSL_set_alpn_protos(c_ssl, alpn, sizeof(alpn))))
@@ -191,10 +193,14 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
     if (!TEST_true(SSL_set_blocking_mode(c_ssl, 0)))
         goto err;
 
-    start_time = now_cb(NULL);
+    /*
+     * We use real time for the timeout not fake time. Otherwise with fake time
+     * we could hit a hang if we never increment the fake time
+     */
+    start_time = real_now(NULL);
 
     for (;;) {
-        if (ossl_time_compare(ossl_time_subtract(now_cb(NULL), start_time),
+        if (ossl_time_compare(ossl_time_subtract(real_now(NULL), start_time),
                               ossl_ms2time(limit_ms)) >= 0) {
             TEST_error("timeout while attempting QUIC server test");
             goto err;
@@ -205,8 +211,21 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
             if (!TEST_true(ret == 1 || is_want(c_ssl, ret)))
                 goto err;
 
-            if (ret == 1)
+            if (ret == 1) {
                 c_connected = 1;
+            } else {
+                /*
+                 * keep timer ticking to keep handshake running.
+                 * The timer is important for calculation of ping deadline.
+                 * If things stall for whatever reason we at least send
+                 * ACK eliciting ping to let peer know we are here ready
+                 * to hear back.
+                 */
+                if (!TEST_true(CRYPTO_THREAD_write_lock(fake_time_lock)))
+                    goto err;
+                fake_time = ossl_time_add(fake_time, ossl_ms2time(100));
+                CRYPTO_THREAD_unlock(fake_time_lock);
+            }
         }
 
         if (c_connected && !c_write_done) {
@@ -301,15 +320,27 @@ static int do_test(int use_thread_assist, int use_fake_time, int use_inject)
 
         if (c_start_idle_test && !c_done_idle_test) {
             /* This is more than our default idle timeout of 30s. */
-            if (idle_units_done < 600) {
+            if (idle_units_done < 6000) {
+                struct timeval tv;
+                int isinf;
+
                 if (!TEST_true(CRYPTO_THREAD_write_lock(fake_time_lock)))
                     goto err;
-                fake_time = ossl_time_add(fake_time, ossl_ms2time(100));
+                fake_time = ossl_time_add(fake_time, ossl_ms2time(10));
                 CRYPTO_THREAD_unlock(fake_time_lock);
 
                 ++idle_units_done;
                 ossl_quic_conn_force_assist_thread_wake(c_ssl);
-                OSSL_sleep(1); /* Ensure CPU scheduling for test purposes */
+
+                /*
+                 * If the event timeout has expired then give the assistance
+                 * thread a chance to catch up
+                 */
+                if (!TEST_true(SSL_get_event_timeout(c_ssl, &tv, &isinf)))
+                    goto err;
+                if (!isinf && ossl_time_compare(ossl_time_zero(),
+                                                ossl_time_from_timeval(tv)) >= 0)
+                    OSSL_sleep(10); /* Ensure CPU scheduling for test purposes */
             } else {
                 c_done_idle_test = 1;
             }

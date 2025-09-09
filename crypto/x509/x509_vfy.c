@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -22,6 +22,7 @@
 #include <openssl/asn1.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <openssl/ocsp.h>
 #include <openssl/objects.h>
 #include <openssl/core_names.h>
 #include "internal/dane.h"
@@ -50,15 +51,16 @@ static int dane_verify(X509_STORE_CTX *ctx);
 static int dane_verify_rpk(X509_STORE_CTX *ctx);
 static int null_callback(int ok, X509_STORE_CTX *e);
 static int check_issued(X509_STORE_CTX *ctx, X509 *x, X509 *issuer);
-static X509 *find_issuer(X509_STORE_CTX *ctx, STACK_OF(X509) *sk, X509 *x);
 static int check_extensions(X509_STORE_CTX *ctx);
 static int check_name_constraints(X509_STORE_CTX *ctx);
 static int check_id(X509_STORE_CTX *ctx);
 static int check_trust(X509_STORE_CTX *ctx, int num_untrusted);
 static int check_revocation(X509_STORE_CTX *ctx);
-static int check_cert(X509_STORE_CTX *ctx);
+#ifndef OPENSSL_NO_OCSP
+static int check_cert_ocsp_resp(X509_STORE_CTX *ctx);
+#endif
+static int check_cert_crl(X509_STORE_CTX *ctx);
 static int check_policy(X509_STORE_CTX *ctx);
-static int get_issuer_sk(X509 **issuer, X509_STORE_CTX *ctx, X509 *x);
 static int check_dane_issuer(X509_STORE_CTX *ctx, int depth);
 static int check_cert_key_level(X509_STORE_CTX *ctx, X509 *cert);
 static int check_key_level(X509_STORE_CTX *ctx, EVP_PKEY *pkey);
@@ -186,6 +188,24 @@ static int verify_cb_crl(X509_STORE_CTX *ctx, int err)
     return ctx->verify_cb(0, ctx);
 }
 
+#ifndef OPENSSL_NO_OCSP
+/*
+ * Inform the verify callback of an error, OCSP-specific variant.
+ * It is called also on OCSP response errors, if the
+ * X509_V_FLAG_OCSP_RESP_CHECK or X509_V_FLAG_OCSP_RESP_CHECK_ALL flag
+ * is set.
+ * Here, the error depth and certificate are already set, we just specify
+ * the error number.
+ *
+ * Returns 0 to abort verification with an error, non-zero to continue.
+ */
+static int verify_cb_ocsp(X509_STORE_CTX *ctx, int err)
+{
+    ctx->error = err;
+    return ctx->verify_cb(0, ctx);
+}
+#endif
+
 /* Sadly, returns 0 also on internal error in ctx->verify_cb(). */
 static int check_auth_level(X509_STORE_CTX *ctx)
 {
@@ -226,7 +246,6 @@ static int verify_rpk(X509_STORE_CTX *ctx)
 
     return !!ctx->verify_cb(ctx->error == X509_V_OK, ctx);
 }
-
 
 /*-
  * Returns -1 on internal error.
@@ -377,30 +396,96 @@ static int sk_X509_contains(STACK_OF(X509) *sk, X509 *cert)
     return 0;
 }
 
-/*
- * Find in given STACK_OF(X509) |sk| an issuer cert (if any) of given cert |x|.
- * The issuer must not yet be in |ctx->chain|, yet allowing the exception that
- *     |x| is self-issued and |ctx->chain| has just one element.
- * Prefer the first non-expired one, else take the most recently expired one.
+/*-
+ * Find in |sk| an issuer cert of cert |x| accepted by |ctx->check_issued|.
+ * If no_dup, the issuer must not yet be in |ctx->chain|, yet allowing the
+ *     exception that |x| is self-issued and |ctx->chain| has just one element.
+ * Prefer the first match with suitable validity period or latest expiration.
  */
-static X509 *find_issuer(X509_STORE_CTX *ctx, STACK_OF(X509) *sk, X509 *x)
+/*
+ * Note: so far, we do not check during chain building
+ * whether any key usage extension stands against a candidate issuer cert.
+ * Likely it would be good if build_chain() sets |check_signing_allowed|.
+ * Yet if |sk| is a list of trusted certs, as with X509_STORE_CTX_set0_trusted_stack(),
+ * better not set |check_signing_allowed|.
+ * Maybe not touch X509_STORE_CTX_get1_issuer(), for API backward compatiblity.
+ */
+static X509 *get0_best_issuer_sk(X509_STORE_CTX *ctx, int check_signing_allowed,
+                                 int no_dup, STACK_OF(X509) *sk, X509 *x)
 {
     int i;
-    X509 *issuer, *rv = NULL;
+    X509 *candidate, *issuer = NULL;
 
     for (i = 0; i < sk_X509_num(sk); i++) {
-        issuer = sk_X509_value(sk, i);
-        if (ctx->check_issued(ctx, x, issuer)
-            && (((x->ex_flags & EXFLAG_SI) != 0 && sk_X509_num(ctx->chain) == 1)
-                || !sk_X509_contains(ctx->chain, issuer))) {
-            if (ossl_x509_check_cert_time(ctx, issuer, -1))
-                return issuer;
-            if (rv == NULL || ASN1_TIME_compare(X509_get0_notAfter(issuer),
-                                                X509_get0_notAfter(rv)) > 0)
-                rv = issuer;
+        candidate = sk_X509_value(sk, i);
+        if (no_dup
+            && !((x->ex_flags & EXFLAG_SI) != 0 && sk_X509_num(ctx->chain) == 1)
+            && sk_X509_contains(ctx->chain, candidate))
+            continue;
+        if (ctx->check_issued(ctx, x, candidate)) {
+            if (check_signing_allowed
+                /* yet better not check key usage for trust anchors */
+                && ossl_x509_signing_allowed(candidate, x) != X509_V_OK)
+                continue;
+            if (ossl_x509_check_cert_time(ctx, candidate, -1))
+                return candidate;
+            /*
+             * Leave in *issuer the first match that has the latest expiration
+             * date so we return nearest match if no certificate time is OK.
+             */
+            if (issuer == NULL
+                    || ASN1_TIME_compare(X509_get0_notAfter(candidate),
+                                         X509_get0_notAfter(issuer)) > 0)
+                issuer = candidate;
         }
     }
-    return rv;
+    return issuer;
+}
+
+/*-
+ * Try to get issuer cert from |ctx->store| accepted by |ctx->check_issued|.
+ * Prefer the first match with suitable validity period or latest expiration.
+ *
+ * Return values are:
+ *  1 lookup successful.
+ *  0 certificate not found.
+ * -1 some other error.
+ */
+int X509_STORE_CTX_get1_issuer(X509 **issuer, X509_STORE_CTX *ctx, X509 *x)
+{
+    const X509_NAME *xn = X509_get_issuer_name(x);
+    X509_OBJECT *obj = X509_OBJECT_new();
+    STACK_OF(X509) *certs;
+    int ret;
+
+    *issuer = NULL;
+    if (obj == NULL)
+        return -1;
+    ret = ossl_x509_store_ctx_get_by_subject(ctx, X509_LU_X509, xn, obj);
+    if (ret != 1)
+        goto end;
+
+    /* quick happy path: certificate matches and is currently valid */
+    if (ctx->check_issued(ctx, x, obj->data.x509)) {
+        if (ossl_x509_check_cert_time(ctx, obj->data.x509, -1)) {
+            *issuer = obj->data.x509;
+            /* |*issuer| has taken over the cert reference from |obj| */
+            obj->type = X509_LU_NONE;
+            goto end;
+        }
+    }
+
+    ret = -1;
+    if ((certs = X509_STORE_CTX_get1_certs(ctx, xn)) == NULL)
+        goto end;
+    *issuer = get0_best_issuer_sk(ctx, 0, 0 /* allow duplicates */, certs, x);
+    ret = 0;
+    if (*issuer != NULL)
+        ret = X509_up_ref(*issuer) ? 1 : -1;
+    OSSL_STACK_OF_X509_free(certs);
+ end:
+    X509_OBJECT_free(obj);
+    return ret;
 }
 
 /* Check that the given certificate |x| is issued by the certificate |issuer| */
@@ -421,9 +506,9 @@ static int check_issued(ossl_unused X509_STORE_CTX *ctx, X509 *x, X509 *issuer)
  * Alternative get_issuer method: look up from a STACK_OF(X509) in other_ctx.
  * Returns -1 on internal error.
  */
-static int get_issuer_sk(X509 **issuer, X509_STORE_CTX *ctx, X509 *x)
+static int get1_best_issuer_other_sk(X509 **issuer, X509_STORE_CTX *ctx, X509 *x)
 {
-    *issuer = find_issuer(ctx, ctx->other_ctx, x);
+    *issuer = get0_best_issuer_sk(ctx, 0, 1 /* no_dup */, ctx->other_ctx, x);
     if (*issuer == NULL)
         return 0;
     return X509_up_ref(*issuer) ? 1 : -1;
@@ -643,7 +728,7 @@ static int check_extensions(X509_STORE_CTX *ctx)
         }
 
         /* check_purpose() makes the callback as needed */
-        if (purpose > 0 && !check_purpose(ctx, x, purpose, i, must_be_ca))
+        if (purpose >= X509_PURPOSE_MIN && !check_purpose(ctx, x, purpose, i, must_be_ca))
             return 0;
         /* Check path length */
         CB_FAIL_IF(i > 1 && x->ex_pathlen != -1
@@ -973,28 +1058,209 @@ static int check_trust(X509_STORE_CTX *ctx, int num_untrusted)
 static int check_revocation(X509_STORE_CTX *ctx)
 {
     int i = 0, last = 0, ok = 0;
+    int crl_check_enabled =
+        (ctx->param->flags &
+         (X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL)) != 0;
+    int crl_check_all_enabled =
+        (ctx->param->flags & X509_V_FLAG_CRL_CHECK_ALL) != 0;
+    int ocsp_check_enabled =
+        (ctx->param->flags &
+         (X509_V_FLAG_OCSP_RESP_CHECK | X509_V_FLAG_OCSP_RESP_CHECK_ALL)) != 0;
+    int ocsp_check_all_enabled =
+        (ctx->param->flags & X509_V_FLAG_OCSP_RESP_CHECK_ALL) != 0;
 
-    if ((ctx->param->flags & X509_V_FLAG_CRL_CHECK) == 0)
+    if (!crl_check_enabled && !ocsp_check_enabled)
         return 1;
-    if ((ctx->param->flags & X509_V_FLAG_CRL_CHECK_ALL) != 0) {
-        last = sk_X509_num(ctx->chain) - 1;
-    } else {
-        /* If checking CRL paths this isn't the EE certificate */
-        if (ctx->parent != NULL)
-            return 1;
-        last = 0;
+
+    if (ocsp_check_enabled) {
+#ifndef OPENSSL_NO_OCSP
+        /*
+         * certificate status checking with OCSP
+         */
+        if (ocsp_check_all_enabled)
+            last = sk_X509_num(ctx->chain) - 1;
+        else if (!crl_check_all_enabled && ctx->parent != NULL)
+            return 1; /* If checking CRL paths this isn't the EE certificate */
+
+        for (i = 0; i <= last; i++) {
+            ctx->error_depth = i;
+            ctx->current_cert = sk_X509_value(ctx->chain, i);
+
+            /* skip if cert is apparently self-signed */
+            if (ctx->current_cert->ex_flags & EXFLAG_SS)
+                continue;
+
+            /* the issuer certificate is the next in the chain */
+            ctx->current_issuer = sk_X509_value(ctx->chain, i + 1);
+
+            ok = check_cert_ocsp_resp(ctx);
+
+            /*
+             * In the case the certificate status is REVOKED, the verification
+             * can stop here.
+             */
+            if (ok == V_OCSP_CERTSTATUS_REVOKED) {
+                return verify_cb_ocsp(ctx, ctx->error != 0
+                                      ? ctx->error
+                                      : X509_V_ERR_OCSP_VERIFY_FAILED);
+            }
+
+            /*
+             * In the case the certificate status is GOOD, continue with the next
+             * certificate.
+             */
+            if (ok == V_OCSP_CERTSTATUS_GOOD)
+                continue;
+
+            /*
+             * As stated in RFC 6961 section 2.2:
+             * If OCSP is not enabled or the client receives a "ocsp_response_list"
+             * that does not contain a response for one or more of the certificates
+             * in the completed certificate chain, the client SHOULD attempt to
+             * validate the certificate using an alternative retrieval method,
+             * such as downloading the relevant CRL;
+             */
+            if (crl_check_all_enabled || (crl_check_enabled && i == 0)) {
+                ok = check_cert_crl(ctx);
+                if (!ok)
+                    return ok;
+            } else {
+                ok = verify_cb_ocsp(ctx, X509_V_ERR_OCSP_VERIFY_FAILED);
+                if (!ok)
+                    return ok;
+            }
+        }
+#endif
     }
-    for (i = 0; i <= last; i++) {
-        ctx->error_depth = i;
-        ok = check_cert(ctx);
-        if (!ok)
-            return ok;
+
+    if (crl_check_enabled && !ocsp_check_all_enabled) {
+        /* certificate status check with CRLs */
+        if (crl_check_all_enabled) {
+            last = sk_X509_num(ctx->chain) - 1;
+        } else {
+            /* If checking CRL paths this isn't the EE certificate */
+            if (ctx->parent != NULL)
+                return 1;
+            last = 0;
+        }
+
+        /*
+         * in the case that OCSP is only enabled for the server certificate
+         * and CRL for the complete chain, the rest of the chain has to be
+         * checked here
+         */
+        if (ocsp_check_enabled && crl_check_all_enabled)
+            i = 1;
+        else
+            i = 0;
+        for (; i <= last; i++) {
+            ctx->error_depth = i;
+            ok = check_cert_crl(ctx);
+            if (!ok)
+                return ok;
+        }
     }
+
     return 1;
 }
 
+#ifndef OPENSSL_NO_OCSP
+static int check_cert_ocsp_resp(X509_STORE_CTX *ctx)
+{
+    int cert_status, crl_reason;
+    int i;
+    OCSP_RESPONSE *resp = NULL;
+    OCSP_BASICRESP *bs = NULL;
+    OCSP_SINGLERESP *sr = NULL;
+    OCSP_CERTID *sr_cert_id = NULL;
+    ASN1_GENERALIZEDTIME *rev, *thisupd, *nextupd;
+    ASN1_OBJECT *cert_id_md_oid;
+    EVP_MD *cert_id_md;
+    OCSP_CERTID *cert_id = NULL;
+    int ret = V_OCSP_CERTSTATUS_UNKNOWN;
+    int num;
+
+    num = sk_OCSP_RESPONSE_num(ctx->ocsp_resp);
+
+    if (num < 0 || num <= ctx->error_depth)
+        return X509_V_ERR_OCSP_NO_RESPONSE;
+
+    if ((resp = sk_OCSP_RESPONSE_value(ctx->ocsp_resp, ctx->error_depth)) == NULL
+        || (bs = OCSP_response_get1_basic(resp)) == NULL
+        || (num = OCSP_resp_count(bs)) < 1)
+        return X509_V_ERR_OCSP_NO_RESPONSE;
+
+    if (OCSP_response_status(resp) != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
+        OCSP_BASICRESP_free(bs);
+        ret = X509_V_ERR_OCSP_RESP_INVALID;
+        goto end;
+    }
+
+    if (OCSP_basic_verify(bs, ctx->chain, ctx->store, OCSP_TRUSTOTHER) <= 0) {
+        ret = X509_V_ERR_OCSP_SIGNATURE_FAILURE;
+        goto end;
+    }
+
+    /* find the right single response in the OCSP response */
+    for (i = 0; i < num; i++) {
+        sr = OCSP_resp_get0(bs, i);
+
+        /* determine the md algorithm which was used to create cert id */
+        sr_cert_id = (OCSP_CERTID *)OCSP_SINGLERESP_get0_id(sr);
+        OCSP_id_get0_info(NULL, &cert_id_md_oid, NULL, NULL, sr_cert_id);
+        if (cert_id_md_oid != NULL)
+            cert_id_md = (EVP_MD *)EVP_get_digestbyobj(cert_id_md_oid);
+        else
+            cert_id_md = NULL;
+
+        /* search the stack for the requested OCSP response */
+        cert_id = OCSP_cert_to_id(cert_id_md, ctx->current_cert, ctx->current_issuer);
+        if (cert_id == NULL) {
+            ret = X509_V_ERR_OCSP_RESP_INVALID;
+            goto end;
+        }
+
+        if (!OCSP_id_cmp(cert_id, sr_cert_id))
+            break;
+
+        OCSP_CERTID_free(cert_id);
+        cert_id = NULL;
+    }
+
+    if (cert_id == NULL) {
+        ret = X509_V_ERR_OCSP_NO_RESPONSE;
+        goto end;
+    }
+
+    if (OCSP_resp_find_status(bs, cert_id, &cert_status, &crl_reason, &rev,
+                              &thisupd, &nextupd) <= 0) {
+        ret = X509_V_ERR_OCSP_RESP_INVALID;
+        goto end;
+    }
+
+    if (cert_status == V_OCSP_CERTSTATUS_GOOD) {
+        /*
+         * Note:
+         * A OCSP stapling result will be accepted up to 5 minutes
+         * after it expired!
+         */
+        if (!OCSP_check_validity(thisupd, nextupd, 300L, -1L))
+            ret = X509_V_ERR_OCSP_HAS_EXPIRED;
+        else
+            ret = V_OCSP_CERTSTATUS_GOOD;
+    } else {
+        ret = cert_status;
+    }
+
+end:
+    OCSP_CERTID_free(cert_id);
+    OCSP_BASICRESP_free(bs);
+    return ret;
+}
+#endif
+
 /* Sadly, returns 0 also on internal error. */
-static int check_cert(X509_STORE_CTX *ctx)
+static int check_cert_crl(X509_STORE_CTX *ctx)
 {
     X509_CRL *crl = NULL, *dcrl = NULL;
     int ok = 0;
@@ -1006,6 +1272,9 @@ static int check_cert(X509_STORE_CTX *ctx)
     ctx->current_crl_score = 0;
     ctx->current_reasons = 0;
 
+    /* skip if cert is apparently self-signed */
+    if (ctx->current_cert->ex_flags & EXFLAG_SS)
+        return 1;
     if ((x->ex_flags & EXFLAG_PROXY) != 0)
         return 1;
 
@@ -1155,12 +1424,13 @@ static int get_crl_sk(X509_STORE_CTX *ctx, X509_CRL **pcrl, X509_CRL **pdcrl,
     }
 
     if (best_crl != NULL) {
+        if (!X509_CRL_up_ref(best_crl))
+            return 0;
         X509_CRL_free(*pcrl);
         *pcrl = best_crl;
         *pissuer = best_crl_issuer;
         *pscore = best_score;
         *preasons = best_reasons;
-        X509_CRL_up_ref(best_crl);
         X509_CRL_free(*pdcrl);
         *pdcrl = NULL;
         get_delta_sk(ctx, pdcrl, pscore, best_crl, crls);
@@ -1246,10 +1516,16 @@ static void get_delta_sk(X509_STORE_CTX *ctx, X509_CRL **dcrl, int *pscore,
     for (i = 0; i < sk_X509_CRL_num(crls); i++) {
         delta = sk_X509_CRL_value(crls, i);
         if (check_delta_base(delta, base)) {
+            if (!X509_CRL_up_ref(delta)) {
+                *dcrl = NULL;
+                return;
+            }
+
+            *dcrl = delta;
+
             if (check_crl_time(ctx, delta, 0))
                 *pscore |= CRL_SCORE_TIME_DELTA;
-            X509_CRL_up_ref(delta);
-            *dcrl = delta;
+
             return;
         }
     }
@@ -1574,7 +1850,7 @@ static int get_crl_delta(X509_STORE_CTX *ctx,
 
     sk_X509_CRL_pop_free(skcrl, X509_CRL_free);
 
- done:
+done:
     /* If we got any kind of CRL use it and return success */
     if (crl != NULL) {
         ctx->current_issuer = issuer;
@@ -1606,6 +1882,8 @@ static int check_crl(X509_STORE_CTX *ctx, X509_CRL *crl)
         issuer = sk_X509_value(ctx->chain, cnum + 1);
     } else {
         issuer = sk_X509_value(ctx->chain, chnum);
+        if (!ossl_assert(issuer != NULL))
+            return 0;
         /* If not self-issued, can't check signature */
         if (!ctx->check_issued(ctx, issuer, issuer) &&
             !verify_cb_crl(ctx, X509_V_ERR_UNABLE_TO_GET_CRL_ISSUER))
@@ -2163,7 +2441,7 @@ X509_CRL *X509_CRL_diff(X509_CRL *base, X509_CRL *newer,
     }
 
     /* Set base CRL number: must be critical */
-    if (!X509_CRL_add1_ext_i2d(crl, NID_delta_crl, base->crl_number, 1, 0)) {
+    if (X509_CRL_add1_ext_i2d(crl, NID_delta_crl, base->crl_number, 1, 0) <= 0) {
         ERR_raise(ERR_LIB_X509, ERR_R_X509_LIB);
         goto err;
     }
@@ -2301,6 +2579,13 @@ void X509_STORE_CTX_set0_crls(X509_STORE_CTX *ctx, STACK_OF(X509_CRL) *sk)
     ctx->crls = sk;
 }
 
+#ifndef OPENSSL_NO_OCSP
+void X509_STORE_CTX_set_ocsp_resp(X509_STORE_CTX *ctx, STACK_OF(OCSP_RESPONSE) *sk)
+{
+    ctx->ocsp_resp = sk;
+}
+#endif
+
 int X509_STORE_CTX_set_purpose(X509_STORE_CTX *ctx, int purpose)
 {
     /*
@@ -2321,12 +2606,15 @@ int X509_STORE_CTX_set_trust(X509_STORE_CTX *ctx, int trust)
 }
 
 /*
- * This function is used to set the X509_STORE_CTX purpose and trust values.
+ * Use this function to set the X509_STORE_CTX purpose and/or trust id values.
+ * The |def_purpose| argument is used if the given purpose value is 0.
+ * The |purpose| is unchanged if also the def_purpose argument is 0.
+ * The |trust| is unchanged if the given trust value is X509_TRUST_DEFAULT.
  * This is intended to be used when another structure has its own trust and
- * purpose values which (if set) will be inherited by the ctx. If they aren't
- * set then we will usually have a default purpose in mind which should then
- * be used to set the trust value. An example of this is SSL use: an SSL
- * structure will have its own purpose and trust settings which the
+ * purpose values, which (if set) will be inherited by the |ctx|. If they aren't
+ * set then we will usually have a default purpose in mind, which should then
+ * be used to set the trust id. An example of this is SSL use: an SSL
+ * structure will have its own purpose and trust settings, which the
  * application can set: if they aren't set then we use the default of SSL
  * client/server.
  */
@@ -2363,10 +2651,10 @@ int X509_STORE_CTX_purpose_inherit(X509_STORE_CTX *ctx, int def_purpose,
             ptmp = X509_PURPOSE_get0(idx);
         }
         /* If trust not set then get from purpose default */
-        if (trust == 0)
+        if (trust == X509_TRUST_DEFAULT)
             trust = ptmp->trust;
     }
-    if (trust != 0) {
+    if (trust != X509_TRUST_DEFAULT) {
         idx = X509_TRUST_get_by_id(trust);
         if (idx == -1) {
             ERR_raise(ERR_LIB_X509, X509_R_UNKNOWN_TRUST_ID);
@@ -2376,7 +2664,7 @@ int X509_STORE_CTX_purpose_inherit(X509_STORE_CTX *ctx, int def_purpose,
 
     if (ctx->param->purpose == 0 && purpose != 0)
         ctx->param->purpose = purpose;
-    if (ctx->param->trust == 0 && trust != 0)
+    if (ctx->param->trust == X509_TRUST_DEFAULT && trust != X509_TRUST_DEFAULT)
         ctx->param->trust = trust;
     return 1;
 }
@@ -2416,7 +2704,6 @@ void X509_STORE_CTX_free(X509_STORE_CTX *ctx)
     OPENSSL_free(ctx->propq);
     OPENSSL_free(ctx);
 }
-
 
 int X509_STORE_CTX_init_rpk(X509_STORE_CTX *ctx, X509_STORE *store, EVP_PKEY *rpk)
 {
@@ -2458,6 +2745,7 @@ int X509_STORE_CTX_init(X509_STORE_CTX *ctx, X509_STORE *store, X509 *x509,
     ctx->rpk = NULL;
     /* Zero ex_data to make sure we're cleanup-safe */
     memset(&ctx->ex_data, 0, sizeof(ctx->ex_data));
+    ctx->ocsp_resp = NULL;
 
     /* store->cleanup is always 0 in OpenSSL, if set must be idempotent */
     if (store != NULL)
@@ -2568,7 +2856,7 @@ int X509_STORE_CTX_init(X509_STORE_CTX *ctx, X509_STORE *store, X509 *x509,
 void X509_STORE_CTX_set0_trusted_stack(X509_STORE_CTX *ctx, STACK_OF(X509) *sk)
 {
     ctx->other_ctx = sk;
-    ctx->get_issuer = get_issuer_sk;
+    ctx->get_issuer = get1_best_issuer_other_sk;
     ctx->lookup_certs = lookup_certs_sk;
 }
 
@@ -2612,6 +2900,12 @@ void X509_STORE_CTX_set_time(X509_STORE_CTX *ctx, unsigned long flags,
                              time_t t)
 {
     X509_VERIFY_PARAM_set_time(ctx->param, t);
+}
+
+void X509_STORE_CTX_set_current_reasons(X509_STORE_CTX *ctx,
+                                        unsigned int current_reasons)
+{
+    ctx->current_reasons = current_reasons;
 }
 
 X509 *X509_STORE_CTX_get0_cert(const X509_STORE_CTX *ctx)
@@ -2683,6 +2977,12 @@ X509_STORE_CTX_get_check_revocation(const X509_STORE_CTX *ctx)
 X509_STORE_CTX_get_crl_fn X509_STORE_CTX_get_get_crl(const X509_STORE_CTX *ctx)
 {
     return ctx->get_crl;
+}
+
+void X509_STORE_CTX_set_get_crl(X509_STORE_CTX *ctx,
+                                X509_STORE_CTX_get_crl_fn get_crl)
+{
+    ctx->get_crl = get_crl;
 }
 
 X509_STORE_CTX_check_crl_fn
@@ -2923,11 +3223,15 @@ static int dane_match_cert(X509_STORE_CTX *ctx, X509 *cert, int depth)
             if (DANETLS_USAGE_BIT(usage) & DANETLS_DANE_MASK)
                 matched = 1;
             if (matched || dane->mdpth < 0) {
-                dane->mdpth = depth;
-                dane->mtlsa = t;
+                if (!X509_up_ref(cert)) {
+                    matched = -1;
+                    break;
+                }
+
                 OPENSSL_free(dane->mcert);
                 dane->mcert = cert;
-                X509_up_ref(cert);
+                dane->mdpth = depth;
+                dane->mtlsa = t;
             }
             break;
         }
@@ -3444,7 +3748,7 @@ static int build_chain(X509_STORE_CTX *ctx)
                 goto int_err;
             curr = sk_X509_value(ctx->chain, num - 1);
             issuer = (X509_self_signed(curr, 0) > 0 || num > max_depth) ?
-                NULL : find_issuer(ctx, sk_untrusted, curr);
+                NULL : get0_best_issuer_sk(ctx, 0, 1 /* no_dup */, sk_untrusted, curr);
             if (issuer == NULL) {
                 /*
                  * Once we have reached a self-signed cert or num > max_depth

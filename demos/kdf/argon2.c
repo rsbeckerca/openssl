@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
         if (max_threads == 0)
             threads = 1;
         else if (max_threads < parallel_cost)
-            threads = max_threads;
+            threads = (unsigned int)max_threads;
     }
 
     /* Set password */
@@ -144,6 +144,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "Generated key does not match expected value\n");
         goto end;
     }
+
+    printf("Success\n");
 
     rv = EXIT_SUCCESS;
 end:

@@ -1,11 +1,13 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+#include "internal/e_os.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,7 +152,7 @@ typedef enum OPTION_choice {
     OPT_IN, OPT_INFORM, OPT_OUT, OPT_DATEOPT, OPT_OUTDIR, OPT_VFYOPT,
     OPT_SIGOPT, OPT_NOTEXT, OPT_BATCH, OPT_PRESERVEDN, OPT_NOEMAILDN,
     OPT_GENCRL, OPT_MSIE_HACK, OPT_CRL_LASTUPDATE, OPT_CRL_NEXTUPDATE,
-    OPT_CRLDAYS, OPT_CRLHOURS, OPT_CRLSEC,
+    OPT_CRLDAYS, OPT_CRLHOURS, OPT_CRLSEC, OPT_NOT_BEFORE, OPT_NOT_AFTER,
     OPT_INFILES, OPT_SS_CERT, OPT_SPKAC, OPT_REVOKE, OPT_VALID,
     OPT_EXTENSIONS, OPT_EXTFILE, OPT_STATUS, OPT_UPDATEDB, OPT_CRLEXTS,
     OPT_RAND_SERIAL, OPT_QUIET,
@@ -199,10 +201,13 @@ const OPTIONS ca_options[] = {
      "Always create a random serial; do not store it"},
     {"multivalue-rdn", OPT_MULTIVALUE_RDN, '-',
      "Deprecated; multi-valued RDNs support is always on."},
-    {"startdate", OPT_STARTDATE, 's', "Cert notBefore, YYMMDDHHMMSSZ"},
+    {"startdate", OPT_STARTDATE, 's',
+     "[CC]YYMMDDHHMMSSZ value for notBefore certificate field"},
+    {"not_before", OPT_NOT_BEFORE, 's', "An alias for -startdate"},
     {"enddate", OPT_ENDDATE, 's',
-     "YYMMDDHHMMSSZ cert notAfter (overrides -days)"},
-    {"days", OPT_DAYS, 'p', "Number of days to certify the cert for"},
+     "[CC]YYMMDDHHMMSSZ value for notAfter certificate field, overrides -days"},
+    {"not_after", OPT_NOT_AFTER, 's', "An alias for -enddate"},
+    {"days", OPT_DAYS, 'p', "Number of days from today to certify the cert for"},
     {"extensions", OPT_EXTENSIONS, 's',
      "Extension section (override value in config file)"},
     {"extfile", OPT_EXTFILE, '<',
@@ -359,9 +364,11 @@ opthelp:
             /* obsolete */
             break;
         case OPT_STARTDATE:
+        case OPT_NOT_BEFORE:
             startdate = opt_arg();
             break;
         case OPT_ENDDATE:
+        case OPT_NOT_AFTER:
             enddate = opt_arg();
             break;
         case OPT_DAYS:
@@ -700,7 +707,7 @@ end_of_options:
             goto end;
         }
         p = pp[DB_serial];
-        j = strlen(p);
+        j = (int)strlen(p);
         if (*p == '-') {
             p++;
             j--;
@@ -787,15 +794,20 @@ end_of_options:
     /*
      * EVP_PKEY_get_default_digest_name() returns 2 if the digest is
      * mandatory for this algorithm.
+     *
+     * That call may give back the name "UNDEF", which has these meanings:
+     *
+     * when def_ret == 2: the user MUST leave the digest unspecified
+     * when def_ret == 1: the user MAY leave the digest unspecified
      */
     if (def_ret == 2 && strcmp(def_dgst, "UNDEF") == 0) {
-        /* The signing algorithm requires there to be no digest */
         dgst = NULL;
     } else if (dgst == NULL
-               && (dgst = lookup_conf(conf, section, ENV_DEFAULT_MD)) == NULL) {
+               && (dgst = lookup_conf(conf, section, ENV_DEFAULT_MD)) == NULL
+               && strcmp(def_dgst, "UNDEF") != 0) {
         goto end;
     } else {
-        if (strcmp(dgst, "default") == 0) {
+        if (strcmp(dgst, "default") == 0 || strcmp(def_dgst, "UNDEF") == 0) {
             if (def_ret <= 0) {
                 BIO_puts(bio_err, "no default digest\n");
                 goto end;
@@ -869,22 +881,8 @@ end_of_options:
         if (startdate == NULL)
             startdate =
                 app_conf_try_string(conf, section, ENV_DEFAULT_STARTDATE);
-        if (startdate != NULL && !ASN1_TIME_set_string_X509(NULL, startdate)) {
-            BIO_printf(bio_err,
-                       "start date is invalid, it should be YYMMDDHHMMSSZ or YYYYMMDDHHMMSSZ\n");
-            goto end;
-        }
-        if (startdate == NULL)
-            startdate = "today";
-
         if (enddate == NULL)
             enddate = app_conf_try_string(conf, section, ENV_DEFAULT_ENDDATE);
-        if (enddate != NULL && !ASN1_TIME_set_string_X509(NULL, enddate)) {
-            BIO_printf(bio_err,
-                       "end date is invalid, it should be YYMMDDHHMMSSZ or YYYYMMDDHHMMSSZ\n");
-            goto end;
-        }
-
         if (days == 0) {
             if (!app_conf_try_number(conf, section, ENV_DEFAULT_DAYS, &days))
                 days = 0;
@@ -893,6 +891,9 @@ end_of_options:
             BIO_printf(bio_err, "cannot lookup how many days to certify for\n");
             goto end;
         }
+        if (days != 0 && enddate != NULL)
+            BIO_printf(bio_err,
+                       "Warning: -enddate or -not_after option overriding -days option\n");
 
         if (rand_ser) {
             if ((serial = BN_new()) == NULL || !rand_serial(serial, NULL)) {
@@ -1012,7 +1013,7 @@ end_of_options:
             }
         }
         /*
-         * we have a stack of newly certified certificates and a data base
+         * we have a stack of newly certified certificates and a database
          * and serial number that need updating
          */
 
@@ -1113,7 +1114,7 @@ end_of_options:
             if (!rotate_index(dbfile, "new", "old"))
                 goto end;
 
-            BIO_printf(bio_err, "Data Base Updated\n");
+            BIO_printf(bio_err, "Database updated\n");
         }
     }
 
@@ -1292,7 +1293,7 @@ end_of_options:
             if (!rotate_index(dbfile, "new", "old"))
                 goto end;
 
-            BIO_printf(bio_err, "Data Base Updated\n");
+            BIO_printf(bio_err, "Database updated\n");
         }
     }
     ret = 0;
@@ -1666,7 +1667,7 @@ static int do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509,
             goto end;
     }
 
-    if (!set_cert_times(ret, startdate, enddate, days))
+    if (!set_cert_times(ret, startdate, enddate, days, 0))
         goto end;
 
     if (enddate != NULL) {
@@ -1743,7 +1744,7 @@ static int do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509,
 
     if (verbose)
         BIO_printf(bio_err,
-                   "The subject name appears to be ok, checking data base for clashes\n");
+                   "The subject name appears to be ok, checking database for clashes\n");
 
     /* Build the correct Subject if no e-mail is wanted in the subject. */
     if (!email_dn) {
@@ -1832,7 +1833,7 @@ static int do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509,
         else if (rrow[DB_type][0] == DB_TYPE_VAL)
             p = "Valid";
         else
-            p = "\ninvalid type, Data base error\n";
+            p = "\ninvalid type, Database error\n";
         BIO_printf(bio_err, "Type          :%s\n", p);
         if (rrow[DB_type][0] == DB_TYPE_REV) {
             p = rrow[DB_exp_date];
@@ -1915,7 +1916,7 @@ static int do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509,
         goto end;
     }
 
-    irow = app_malloc(sizeof(*irow) * (DB_NUMBER + 1), "row space");
+    irow = app_malloc_array(DB_NUMBER + 1, sizeof(*irow), "row space");
     for (i = 0; i < DB_NUMBER; i++)
         irow[i] = row[i];
     irow[DB_NUMBER] = NULL;
@@ -2144,7 +2145,7 @@ static int do_revoke(X509 *x509, CA_DB *db, REVINFO_TYPE rev_type,
             goto end;
         }
 
-        irow = app_malloc(sizeof(*irow) * (DB_NUMBER + 1), "row ptr");
+        irow = app_malloc_array(DB_NUMBER + 1, sizeof(*irow), "row ptr");
         for (i = 0; i < DB_NUMBER; i++)
             irow[i] = row[i];
         irow[DB_NUMBER] = NULL;
@@ -2405,9 +2406,9 @@ static char *make_revocation_str(REVINFO_TYPE rev_type, const char *rev_arg)
     i = revtm->length + 1;
 
     if (reason)
-        i += strlen(reason) + 1;
+        i += (int)(strlen(reason) + 1);
     if (other)
-        i += strlen(other) + 1;
+        i += (int)(strlen(other) + 1);
 
     str = app_malloc(i, "revocation reason");
     OPENSSL_strlcpy(str, (char *)revtm->data, i);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -153,7 +153,7 @@ int EVP_PKEY_generate(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey)
         goto legacy;
 
     /*
-     * Asssigning gentmp to ctx->keygen_info is something our legacy
+     * Assigning gentmp to ctx->keygen_info is something our legacy
      * implementations do.  Because the provider implementations aren't
      * allowed to reach into our EVP_PKEY_CTX, we need to provide similar
      * space for backward compatibility.  It's ok that we attach a local
@@ -192,7 +192,7 @@ int EVP_PKEY_generate(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey)
 
     ctx->keygen_info = NULL;
 
-#ifndef FIPS_MODULE
+#if !defined(FIPS_MODULE) && !defined(OPENSSL_NO_DEPRECATED_3_6)
     /* In case |*ppkey| was originally a legacy key */
     if (ret)
         evp_pkey_free_legacy(*ppkey);

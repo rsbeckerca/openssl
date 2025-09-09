@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -73,7 +73,7 @@ static int dh_test(void)
         goto err1;
 
     /* check fails, because p is way too small */
-    if (!DH_check(dh, &i))
+    if (!TEST_true(DH_check(dh, &i)))
         goto err2;
     i ^= DH_MODULUS_TOO_SMALL;
     if (!TEST_false(i & DH_CHECK_P_NOT_PRIME)
@@ -124,6 +124,29 @@ static int dh_test(void)
     /* We'll have a stale error on the queue from the above test so clear it */
     ERR_clear_error();
 
+    if (!TEST_ptr(BN_copy(q, p)) || !TEST_true(BN_add(q, q, BN_value_one())))
+        goto err3;
+
+    if (!TEST_true(DH_check(dh, &i)))
+        goto err3;
+    if (!TEST_true(i & DH_CHECK_INVALID_Q_VALUE)
+        || !TEST_false(i & DH_CHECK_Q_NOT_PRIME))
+        goto err3;
+
+    /* Modulus of size: dh check max modulus bits + 1 */
+    if (!TEST_true(BN_set_word(p, 1))
+            || !TEST_true(BN_lshift(p, p, OPENSSL_DH_CHECK_MAX_MODULUS_BITS)))
+        goto err3;
+
+    /*
+     * We expect no checks at all for an excessively large modulus
+     */
+    if (!TEST_false(DH_check(dh, &i)))
+        goto err3;
+
+    /* We'll have a stale error on the queue from the above test so clear it */
+    ERR_clear_error();
+
     /*
      * II) key generation
      */
@@ -138,7 +161,7 @@ static int dh_test(void)
         goto err3;
 
     /* ... and check whether it is valid */
-    if (!DH_check(a, &i))
+    if (!TEST_true(DH_check(a, &i)))
         goto err3;
     if (!TEST_false(i & DH_CHECK_P_NOT_PRIME)
             || !TEST_false(i & DH_CHECK_P_NOT_SAFE_PRIME)
@@ -185,17 +208,17 @@ static int dh_test(void)
 
     alen = DH_size(a);
     if (!TEST_ptr(abuf = OPENSSL_malloc(alen))
-            || !TEST_true((aout = DH_compute_key(abuf, bpub_key, a)) != -1))
+            || !TEST_int_gt((aout = DH_compute_key(abuf, bpub_key, a)), 0))
         goto err3;
 
     blen = DH_size(b);
     if (!TEST_ptr(bbuf = OPENSSL_malloc(blen))
-            || !TEST_true((bout = DH_compute_key(bbuf, apub_key, b)) != -1))
+            || !TEST_int_gt((bout = DH_compute_key(bbuf, apub_key, b)), 0))
         goto err3;
 
     clen = DH_size(c);
     if (!TEST_ptr(cbuf = OPENSSL_malloc(clen))
-            || !TEST_true((cout = DH_compute_key(cbuf, apub_key, c)) != -1))
+            || !TEST_int_gt((cout = DH_compute_key(cbuf, apub_key, c)), 0))
         goto err3;
 
     if (!TEST_true(aout >= 20)
@@ -570,13 +593,13 @@ static int rfc5114_test(void)
                 || !TEST_ptr(dhB = td->get_param()))
             goto bad_err;
 
-        if (!TEST_ptr(priv_key = BN_bin2bn(td->xA, td->xA_len, NULL))
-                || !TEST_ptr(pub_key = BN_bin2bn(td->yA, td->yA_len, NULL))
+        if (!TEST_ptr(priv_key = BN_bin2bn(td->xA, (int)td->xA_len, NULL))
+                || !TEST_ptr(pub_key = BN_bin2bn(td->yA, (int)td->yA_len, NULL))
                 || !TEST_true(DH_set0_key(dhA, pub_key, priv_key)))
             goto bad_err;
 
-        if (!TEST_ptr(priv_key = BN_bin2bn(td->xB, td->xB_len, NULL))
-                || !TEST_ptr(pub_key = BN_bin2bn(td->yB, td->yB_len, NULL))
+        if (!TEST_ptr(priv_key = BN_bin2bn(td->xB, (int)td->xB_len, NULL))
+                || !TEST_ptr(pub_key = BN_bin2bn(td->yB, (int)td->yB_len, NULL))
                 || !TEST_true(DH_set0_key(dhB, pub_key, priv_key)))
             goto bad_err;
         priv_key = pub_key = NULL;
@@ -671,12 +694,12 @@ static int rfc7919_test(void)
 
     alen = DH_size(a);
     if (!TEST_int_gt(alen, 0) || !TEST_ptr(abuf = OPENSSL_malloc(alen))
-            || !TEST_true((aout = DH_compute_key(abuf, bpub_key, a)) != -1))
+            || !TEST_int_gt((aout = DH_compute_key(abuf, bpub_key, a)), 0))
         goto err;
 
     blen = DH_size(b);
     if (!TEST_int_gt(blen, 0) || !TEST_ptr(bbuf = OPENSSL_malloc(blen))
-            || !TEST_true((bout = DH_compute_key(bbuf, apub_key, b)) != -1))
+            || !TEST_int_gt((bout = DH_compute_key(bbuf, apub_key, b)), 0))
         goto err;
 
     if (!TEST_true(aout >= 20)

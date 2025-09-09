@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -185,7 +185,7 @@ static int test_siphash(int idx)
         return 0;
     }
 
-    if (!TEST_int_le(inlen, sizeof(in)))
+    if (!TEST_size_t_le(inlen, sizeof(in)))
         return 0;
 
     /* key and in data are 00 01 02 ... */
@@ -257,7 +257,7 @@ static int test_siphash(int idx)
 static int test_siphash_basic(void)
 {
     SIPHASH siphash = { 0, };
-    unsigned char key[SIPHASH_KEY_SIZE];
+    static const unsigned char key[SIPHASH_KEY_SIZE] = {0};
     unsigned char output[SIPHASH_MAX_DIGEST_SIZE];
 
     /* Use invalid hash size */

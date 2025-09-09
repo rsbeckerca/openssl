@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -247,6 +247,13 @@ static int trust_compat(X509_TRUST *trust, X509 *x, int flags)
         return X509_TRUST_UNTRUSTED;
 }
 
+/*
+ * |id| is the NID of the extended key usage (EKU) to check for certificate |x|.
+ * Return X509_TRUST_REJECTED if negative trust attributes of |x| prevents it.
+ * Return X509_TRUST_TRUSTED if positive trust attributes of |x| accepts it.
+ * If |flags| includes X509_TRUST_OK_ANY_EKU then anyEKU serves as wildcard.
+ * Return X509_TRUST_UNTRUSTED if no clear decision has been reached here.
+ */
 static int obj_trust(int id, X509 *x, int flags)
 {
     X509_CERT_AUX *ax = x->aux;
@@ -275,7 +282,7 @@ static int obj_trust(int id, X509 *x, int flags)
         /*
          * Reject when explicit trust EKU are set and none match.
          *
-         * Returning untrusted is enough for for full chains that end in
+         * Returning untrusted is enough for full chains that end in
          * self-signed roots, because when explicit trust is specified it
          * suppresses the default blanket trust of self-signed objects.
          *

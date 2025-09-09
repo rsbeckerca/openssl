@@ -1,5 +1,5 @@
 /*-
- * Copyright 2019-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -27,6 +27,10 @@
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 
+#ifdef OPENSSL_SYS_WINDOWS
+# define fileno _fileno
+#endif
+
 /*-
  * This demonstration will show how to digest data using
  * a BIO configured with a message digest
@@ -34,7 +38,7 @@
  * The default digest is SHA3-512
  */
 
-int main(int argc, char * argv[])
+int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
     OSSL_LIB_CTX *library_context = NULL;
@@ -42,7 +46,7 @@ int main(int argc, char * argv[])
     BIO *bio_digest = NULL, *reading = NULL;
     EVP_MD *md = NULL;
     unsigned char buffer[512];
-    size_t digest_size;
+    int digest_size;
     char *digest_value = NULL;
     int j;
 
@@ -59,7 +63,7 @@ int main(int argc, char * argv[])
 
     /*
      * Fetch a message digest by name
-     * The algorithm name is case insensitive. 
+     * The algorithm name is case insensitive.
      * See providers(7) for details about algorithm fetching
      */
     md = EVP_MD_fetch(library_context, "SHA3-512", NULL);
@@ -68,6 +72,11 @@ int main(int argc, char * argv[])
         goto cleanup;
     }
     digest_size = EVP_MD_get_size(md);
+    if (digest_size <= 0) {
+        fprintf(stderr, "EVP_MD_get_size returned invalid size.\n");
+        goto cleanup;
+    }
+
     digest_value = OPENSSL_malloc(digest_size);
     if (digest_value == NULL) {
         fprintf(stderr, "Can't allocate %lu bytes for the digest value.\n", (unsigned long)digest_size);

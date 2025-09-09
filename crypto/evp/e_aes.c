@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -885,8 +885,6 @@ typedef struct {
         /* KMO-AES parameter block - end */
     } kmo;
     unsigned int fc;
-
-    int res;
 } S390X_AES_OFB_CTX;
 
 typedef struct {
@@ -903,8 +901,6 @@ typedef struct {
         /* KMF-AES parameter block - end */
     } kmf;
     unsigned int fc;
-
-    int res;
 } S390X_AES_CFB_CTX;
 
 typedef struct {
@@ -1068,7 +1064,6 @@ static int s390x_aes_ofb_init_key(EVP_CIPHER_CTX *ctx,
     memcpy(cctx->kmo.param.cv, iv, ivlen);
     memcpy(cctx->kmo.param.k, key, keylen);
     cctx->fc = S390X_AES_FC(keylen);
-    cctx->res = 0;
     return 1;
 }
 
@@ -1078,7 +1073,7 @@ static int s390x_aes_ofb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     S390X_AES_OFB_CTX *cctx = EVP_C_DATA(S390X_AES_OFB_CTX, ctx);
     const int ivlen = EVP_CIPHER_CTX_get_iv_length(ctx);
     unsigned char *iv = EVP_CIPHER_CTX_iv_noconst(ctx);
-    int n = cctx->res;
+    int n = ctx->num;
     int rem;
 
     memcpy(cctx->kmo.param.cv, iv, ivlen);
@@ -1111,7 +1106,7 @@ static int s390x_aes_ofb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     }
 
     memcpy(iv, cctx->kmo.param.cv, ivlen);
-    cctx->res = n;
+    ctx->num = n;
     return 1;
 }
 
@@ -1137,7 +1132,6 @@ static int s390x_aes_cfb_init_key(EVP_CIPHER_CTX *ctx,
     if (!enc)
         cctx->fc |= S390X_DECRYPT;
 
-    cctx->res = 0;
     memcpy(cctx->kmf.param.cv, iv, ivlen);
     memcpy(cctx->kmf.param.k, key, keylen);
     return 1;
@@ -1151,7 +1145,7 @@ static int s390x_aes_cfb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     const int enc = EVP_CIPHER_CTX_is_encrypting(ctx);
     const int ivlen = EVP_CIPHER_CTX_get_iv_length(ctx);
     unsigned char *iv = EVP_CIPHER_CTX_iv_noconst(ctx);
-    int n = cctx->res;
+    int n = ctx->num;
     int rem;
     unsigned char tmp;
 
@@ -1197,7 +1191,7 @@ static int s390x_aes_cfb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     }
 
     memcpy(iv, cctx->kmf.param.cv, ivlen);
-    cctx->res = n;
+    ctx->num = n;
     return 1;
 }
 
@@ -2957,7 +2951,7 @@ static int aes_gcm_tls_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
         out += len;
         /* Finally write tag */
         CRYPTO_gcm128_tag(&gctx->gcm, out, EVP_GCM_TLS_TAG_LEN);
-        rv = len + EVP_GCM_TLS_EXPLICIT_IV_LEN + EVP_GCM_TLS_TAG_LEN;
+        rv = (int)(len + EVP_GCM_TLS_EXPLICIT_IV_LEN + EVP_GCM_TLS_TAG_LEN);
     } else {
         /* Decrypt */
         if (gctx->ctr) {
@@ -3004,7 +2998,7 @@ static int aes_gcm_tls_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             OPENSSL_cleanse(out, len);
             goto err;
         }
-        rv = len;
+        rv = (int)len;
     }
 
  err:
@@ -3161,7 +3155,7 @@ static int aes_gcm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                     return -1;
             }
         }
-        return len;
+        return (int)len;
     } else {
         if (!EVP_CIPHER_CTX_is_encrypting(ctx)) {
             if (gctx->taglen < 0)
@@ -3565,7 +3559,7 @@ static int aes_ccm_tls_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             return -1;
         if (!CRYPTO_ccm128_tag(ccm, out + len, cctx->M))
             return -1;
-        return len + EVP_CCM_TLS_EXPLICIT_IV_LEN + cctx->M;
+        return (int)(len + EVP_CCM_TLS_EXPLICIT_IV_LEN + cctx->M);
     } else {
         if (cctx->str ? !CRYPTO_ccm128_decrypt_ccm64(ccm, in, out, len,
                                                      cctx->str) :
@@ -3573,7 +3567,7 @@ static int aes_ccm_tls_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             unsigned char tag[16];
             if (CRYPTO_ccm128_tag(ccm, tag, cctx->M)) {
                 if (!CRYPTO_memcmp(tag, in + len, cctx->M))
-                    return len;
+                    return (int)len;
             }
         }
         OPENSSL_cleanse(out, len);
@@ -3606,13 +3600,13 @@ static int aes_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                                     15 - cctx->L, len))
                 return -1;
             cctx->len_set = 1;
-            return len;
+            return (int)len;
         }
         /* If have AAD need message length */
         if (!cctx->len_set && len)
             return -1;
         CRYPTO_ccm128_aad(ccm, in, len);
-        return len;
+        return (int)len;
     }
 
     /* The tag must be set before actually decrypting data */
@@ -3631,7 +3625,7 @@ static int aes_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             CRYPTO_ccm128_encrypt(ccm, in, out, len))
             return -1;
         cctx->tag_set = 1;
-        return len;
+        return (int)len;
     } else {
         int rv = -1;
         if (cctx->str ? !CRYPTO_ccm128_decrypt_ccm64(ccm, in, out, len,
@@ -3641,7 +3635,7 @@ static int aes_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             if (CRYPTO_ccm128_tag(ccm, tag, cctx->M)) {
                 if (!CRYPTO_memcmp(tag, EVP_CIPHER_CTX_buf_noconst(ctx),
                                    cctx->M))
-                    rv = len;
+                    rv = (int)len;
             }
         }
         if (rv == -1)
@@ -3721,7 +3715,7 @@ static int aes_wrap_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     /* If not padding input must be multiple of 8 */
     if (!pad && inlen & 0x7)
         return -1;
-    if (ossl_is_partially_overlapping(out, in, inlen)) {
+    if (ossl_is_partially_overlapping(out, in, (int)inlen)) {
         ERR_raise(ERR_LIB_EVP, EVP_R_PARTIALLY_OVERLAPPING);
         return 0;
     }
@@ -3731,14 +3725,14 @@ static int aes_wrap_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             if (pad)
                 inlen = (inlen + 7) / 8 * 8;
             /* 8 byte prefix */
-            return inlen + 8;
+            return (int)(inlen + 8);
         } else {
             /*
              * If not padding output will be exactly 8 bytes smaller than
              * input. If padding it will be at least 8 bytes smaller but we
              * don't know how much.
              */
-            return inlen - 8;
+            return (int)(inlen - 8);
         }
     }
     if (pad) {
@@ -4027,7 +4021,7 @@ static int aes_ocb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             buf = octx->data_buf;
             buf_len = &(octx->data_buf_len);
 
-            if (ossl_is_partially_overlapping(out + *buf_len, in, len)) {
+            if (ossl_is_partially_overlapping(out + *buf_len, in, (int)len)) {
                 ERR_raise(ERR_LIB_EVP, EVP_R_PARTIALLY_OVERLAPPING);
                 return 0;
             }
@@ -4043,7 +4037,7 @@ static int aes_ocb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
             remaining = AES_BLOCK_SIZE - (*buf_len);
             if (remaining > len) {
                 memcpy(buf + (*buf_len), in, len);
-                *(buf_len) += len;
+                *(buf_len) += (int)len;
                 return 0;
             }
             memcpy(buf + (*buf_len), in, remaining);
@@ -4090,14 +4084,14 @@ static int aes_ocb_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                     (&octx->ocb, in, out, len - trailing_len))
                     return -1;
             }
-            written_len += len - trailing_len;
+            written_len += (int)(len - trailing_len);
             in += len - trailing_len;
         }
 
         /* Handle any trailing partial block */
         if (trailing_len > 0) {
             memcpy(buf, in, trailing_len);
-            *buf_len = trailing_len;
+            *buf_len = (int)trailing_len;
         }
 
         return written_len;

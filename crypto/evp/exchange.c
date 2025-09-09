@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -7,6 +7,7 @@
  * https://www.openssl.org/source/license.html
  */
 
+#include <openssl/core_names.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -18,6 +19,16 @@
 #include "crypto/evp.h"
 #include "evp_local.h"
 
+static void evp_keyexch_free(void *data)
+{
+    EVP_KEYEXCH_free(data);
+}
+
+static int evp_keyexch_up_ref(void *data)
+{
+    return EVP_KEYEXCH_up_ref(data);
+}
+
 static EVP_KEYEXCH *evp_keyexch_new(OSSL_PROVIDER *prov)
 {
     EVP_KEYEXCH *exchange = OPENSSL_zalloc(sizeof(EVP_KEYEXCH));
@@ -25,15 +36,13 @@ static EVP_KEYEXCH *evp_keyexch_new(OSSL_PROVIDER *prov)
     if (exchange == NULL)
         return NULL;
 
-    exchange->lock = CRYPTO_THREAD_lock_new();
-    if (exchange->lock == NULL) {
-        ERR_raise(ERR_LIB_EVP, ERR_R_CRYPTO_LIB);
+    if (!CRYPTO_NEW_REF(&exchange->refcnt, 1)
+        || !ossl_provider_up_ref(prov)) {
+        CRYPTO_FREE_REF(&exchange->refcnt);
         OPENSSL_free(exchange);
         return NULL;
     }
     exchange->prov = prov;
-    ossl_provider_up_ref(prov);
-    exchange->refcnt = 1;
 
     return exchange;
 }
@@ -44,7 +53,7 @@ static void *evp_keyexch_from_algorithm(int name_id,
 {
     const OSSL_DISPATCH *fns = algodef->implementation;
     EVP_KEYEXCH *exchange = NULL;
-    int fncnt = 0, sparamfncnt = 0, gparamfncnt = 0;
+    int fncnt = 0, sparamfncnt = 0, gparamfncnt = 0, derive_found = 0;
 
     if ((exchange = evp_keyexch_new(prov)) == NULL) {
         ERR_raise(ERR_LIB_EVP, ERR_R_EVP_LIB);
@@ -79,7 +88,7 @@ static void *evp_keyexch_from_algorithm(int name_id,
             if (exchange->derive != NULL)
                 break;
             exchange->derive = OSSL_FUNC_keyexch_derive(fns);
-            fncnt++;
+            derive_found = 1;
             break;
         case OSSL_FUNC_KEYEXCH_FREECTX:
             if (exchange->freectx != NULL)
@@ -118,8 +127,15 @@ static void *evp_keyexch_from_algorithm(int name_id,
                 = OSSL_FUNC_keyexch_settable_ctx_params(fns);
             sparamfncnt++;
             break;
+        case OSSL_FUNC_KEYEXCH_DERIVE_SKEY:
+            if (exchange->derive_skey != NULL)
+                break;
+            exchange->derive_skey = OSSL_FUNC_keyexch_derive_skey(fns);
+            derive_found = 1;
+            break;
         }
     }
+    fncnt += derive_found;
     if (fncnt != 4
             || (gparamfncnt != 0 && gparamfncnt != 2)
             || (sparamfncnt != 0 && sparamfncnt != 2)) {
@@ -148,12 +164,12 @@ void EVP_KEYEXCH_free(EVP_KEYEXCH *exchange)
 
     if (exchange == NULL)
         return;
-    CRYPTO_DOWN_REF(&exchange->refcnt, &i, exchange->lock);
+    CRYPTO_DOWN_REF(&exchange->refcnt, &i);
     if (i > 0)
         return;
     OPENSSL_free(exchange->type_name);
     ossl_provider_free(exchange->prov);
-    CRYPTO_THREAD_lock_free(exchange->lock);
+    CRYPTO_FREE_REF(&exchange->refcnt);
     OPENSSL_free(exchange);
 }
 
@@ -161,7 +177,7 @@ int EVP_KEYEXCH_up_ref(EVP_KEYEXCH *exchange)
 {
     int ref = 0;
 
-    CRYPTO_UP_REF(&exchange->refcnt, &ref, exchange->lock);
+    CRYPTO_UP_REF(&exchange->refcnt, &ref);
     return 1;
 }
 
@@ -175,8 +191,8 @@ EVP_KEYEXCH *EVP_KEYEXCH_fetch(OSSL_LIB_CTX *ctx, const char *algorithm,
 {
     return evp_generic_fetch(ctx, OSSL_OP_KEYEXCH, algorithm, properties,
                              evp_keyexch_from_algorithm,
-                             (int (*)(void *))EVP_KEYEXCH_up_ref,
-                             (void (*)(void *))EVP_KEYEXCH_free);
+                             evp_keyexch_up_ref,
+                             evp_keyexch_free);
 }
 
 EVP_KEYEXCH *evp_keyexch_fetch_from_prov(OSSL_PROVIDER *prov,
@@ -186,8 +202,8 @@ EVP_KEYEXCH *evp_keyexch_fetch_from_prov(OSSL_PROVIDER *prov,
     return evp_generic_fetch_from_prov(prov, OSSL_OP_KEYEXCH,
                                        algorithm, properties,
                                        evp_keyexch_from_algorithm,
-                                       (int (*)(void *))EVP_KEYEXCH_up_ref,
-                                       (void (*)(void *))EVP_KEYEXCH_free);
+                                       evp_keyexch_up_ref,
+                                       evp_keyexch_free);
 }
 
 int EVP_PKEY_derive_init(EVP_PKEY_CTX *ctx)
@@ -434,7 +450,10 @@ int EVP_PKEY_derive_set_peer_ex(EVP_PKEY_CTX *ctx, EVP_PKEY *peer,
      */
     if (provkey == NULL)
         goto legacy;
-    return ctx->op.kex.exchange->set_peer(ctx->op.kex.algctx, provkey);
+    ret = ctx->op.kex.exchange->set_peer(ctx->op.kex.algctx, provkey);
+    if (ret <= 0)
+        return ret;
+    goto common;
 
  legacy:
 #ifdef FIPS_MODULE
@@ -486,19 +505,19 @@ int EVP_PKEY_derive_set_peer_ex(EVP_PKEY_CTX *ctx, EVP_PKEY *peer,
         return -1;
     }
 
+    ret = ctx->pmeth->ctrl(ctx, EVP_PKEY_CTRL_PEER_KEY, 1, peer);
+    if (ret <= 0)
+        return ret;
+#endif
+
+ common:
+    if (!EVP_PKEY_up_ref(peer))
+        return -1;
+
     EVP_PKEY_free(ctx->peerkey);
     ctx->peerkey = peer;
 
-    ret = ctx->pmeth->ctrl(ctx, EVP_PKEY_CTRL_PEER_KEY, 1, peer);
-
-    if (ret <= 0) {
-        ctx->peerkey = NULL;
-        return ret;
-    }
-
-    EVP_PKEY_up_ref(peer);
     return 1;
-#endif
 }
 
 int EVP_PKEY_derive_set_peer(EVP_PKEY_CTX *ctx, EVP_PKEY *peer)
@@ -537,6 +556,108 @@ int EVP_PKEY_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *pkeylen)
         return ctx->pmeth->derive(ctx, key, pkeylen);
 }
 
+EVP_SKEY *EVP_PKEY_derive_SKEY(EVP_PKEY_CTX *ctx, EVP_SKEYMGMT *mgmt,
+                               const char *key_type, const char *propquery,
+                               size_t keylen, const OSSL_PARAM params[])
+{
+    EVP_SKEYMGMT *skeymgmt = NULL;
+    EVP_SKEY *ret = NULL;
+
+    if (ctx == NULL || key_type == NULL) {
+        ERR_raise(ERR_LIB_EVP, ERR_R_PASSED_NULL_PARAMETER);
+        return NULL;
+    }
+
+    if (!EVP_PKEY_CTX_IS_DERIVE_OP(ctx)) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_INITIALIZED);
+        return NULL;
+    }
+
+    if (ctx->op.kex.algctx == NULL) {
+        ERR_raise(ERR_R_EVP_LIB, ERR_R_UNSUPPORTED);
+        return NULL;
+    }
+
+    if (mgmt != NULL) {
+        skeymgmt = mgmt;
+    } else {
+        skeymgmt = evp_skeymgmt_fetch_from_prov(ctx->op.kex.exchange->prov,
+                                                key_type, propquery);
+        if (skeymgmt == NULL) {
+            /*
+             * The provider does not support skeymgmt, let's try to fallback
+             * to a provider that supports it
+             */
+            skeymgmt = EVP_SKEYMGMT_fetch(ctx->libctx, key_type, propquery);
+        }
+        if (skeymgmt == NULL) {
+            ERR_raise(ERR_LIB_EVP, ERR_R_FETCH_FAILED);
+            return NULL;
+        }
+    }
+
+    /* Fallback to raw derive + import if necessary */
+    if (skeymgmt->prov != ctx->op.kex.exchange->prov ||
+        ctx->op.kex.exchange->derive_skey == NULL) {
+        size_t tmplen = keylen;
+        unsigned char *key = NULL;
+        OSSL_PARAM import_params[2] = {OSSL_PARAM_END, OSSL_PARAM_END};
+
+        if (ctx->op.kex.exchange->derive == NULL) {
+            ERR_raise(ERR_R_EVP_LIB, ERR_R_UNSUPPORTED);
+            return NULL;
+        }
+
+        key = OPENSSL_zalloc(keylen);
+        if (key == NULL) {
+            ERR_raise(ERR_R_EVP_LIB, ERR_R_CRYPTO_LIB);
+            return NULL;
+        }
+
+        if (!ctx->op.kex.exchange->derive(ctx->op.kex.algctx, key, &tmplen,
+                                          tmplen)) {
+            OPENSSL_free(key);
+            return NULL;
+        }
+
+        if (keylen != tmplen) {
+            OPENSSL_free(key);
+            ERR_raise(ERR_R_EVP_LIB, ERR_R_INTERNAL_ERROR);
+            return NULL;
+        }
+        import_params[0] = OSSL_PARAM_construct_octet_string(OSSL_SKEY_PARAM_RAW_BYTES,
+                                                             key, keylen);
+
+        ret = EVP_SKEY_import_SKEYMGMT(ctx->libctx, skeymgmt,
+                                       OSSL_SKEYMGMT_SELECT_SECRET_KEY, import_params);
+        OPENSSL_clear_free(key, keylen);
+        if (mgmt != skeymgmt)
+            EVP_SKEYMGMT_free(skeymgmt);
+        return ret;
+    }
+
+    ret = evp_skey_alloc(skeymgmt);
+    if (ret == NULL) {
+        if (mgmt != skeymgmt)
+            EVP_SKEYMGMT_free(skeymgmt);
+        return NULL;
+    }
+
+    ret->keydata = ctx->op.kex.exchange->derive_skey(ctx->op.kex.algctx,
+                                                     ossl_provider_ctx(skeymgmt->prov),
+                                                     skeymgmt->import, keylen, params);
+
+    if (mgmt != skeymgmt)
+        EVP_SKEYMGMT_free(skeymgmt);
+
+    if (ret->keydata == NULL) {
+        EVP_SKEY_free(ret);
+        return NULL;
+    }
+
+    return ret;
+}
+
 int evp_keyexch_get_number(const EVP_KEYEXCH *keyexch)
 {
     return keyexch->name_id;
@@ -565,8 +686,8 @@ void EVP_KEYEXCH_do_all_provided(OSSL_LIB_CTX *libctx,
     evp_generic_do_all(libctx, OSSL_OP_KEYEXCH,
                        (void (*)(void *, void *))fn, arg,
                        evp_keyexch_from_algorithm,
-                       (int (*)(void *))EVP_KEYEXCH_up_ref,
-                       (void (*)(void *))EVP_KEYEXCH_free);
+                       evp_keyexch_up_ref,
+                       evp_keyexch_free);
 }
 
 int EVP_KEYEXCH_names_do_all(const EVP_KEYEXCH *keyexch,
